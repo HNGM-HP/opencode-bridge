@@ -85,6 +85,7 @@ export const attachmentConfig = {
   maxSize: parseInt(process.env.ATTACHMENT_MAX_SIZE || String(50 * 1024 * 1024), 10),
 };
 
+
 // 验证配置
 export function validateConfig(): void {
   const errors: string[] = [];

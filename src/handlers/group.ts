@@ -319,8 +319,15 @@ export class GroupHandler {
       console.log(`[Group] 发送消息: chat=${chatId}, session=${sessionId.slice(0, 8)}...`);
 
       const parts: OpencodePartInput[] = [];
-      if (text) {
-        parts.push({ type: 'text', text });
+
+      // 按需注入文件发送指令：仅在检测到发送意图关键词时注入
+      let effectiveText = text;
+      if (effectiveText && /发给我|发送文件|上传|传给我|send.*file/i.test(effectiveText)) {
+        effectiveText += '\n[feishu-bridge: 如需发送文件到当前群聊，执行 echo FEISHU_SEND_FILE <文件绝对路径>]';
+      }
+
+      if (effectiveText) {
+        parts.push({ type: 'text', text: effectiveText });
       }
 
       if (attachments && attachments.length > 0) {
@@ -385,6 +392,12 @@ export class GroupHandler {
         await feishuClient.reply(messageId, `❌ ${errorMessage}`);
       }
     }
+  }
+
+  // 公开的 prompt 调度方法，供 command 层（如 /send_file）调用
+  async dispatchPrompt(sessionId: string, text: string, chatId: string, messageId: string): Promise<void> {
+    const config = chatSessionStore.getSession(chatId);
+    await this.processPrompt(sessionId, text, chatId, messageId, undefined, config);
   }
 
   // 处理附件

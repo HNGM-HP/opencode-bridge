@@ -11,6 +11,7 @@ import { lifecycleHandler } from './handlers/lifecycle.js';
 import { commandHandler } from './handlers/command.js';
 import { cardActionHandler } from './handlers/card-action.js';
 import { validateConfig } from './config.js';
+import { sendFileToFeishu, validateFilePath } from './handlers/file-sender.js';
 import {
   buildStreamCards,
   type StreamCardData,
@@ -56,6 +57,7 @@ async function main() {
 
   const toolCallChatMap = new Map<string, CorrelationChatRef>();
   const messageChatMap = new Map<string, CorrelationChatRef>();
+  const processedSendFileRequests = new Map<string, number>(); // 文件发送去重 (toolKey → timestamp)
 
   type ToolRuntimeState = {
     name: string;
@@ -1423,12 +1425,58 @@ async function main() {
           const previous = getOrCreateToolStateBucket(bufferKey).get(toolKey);
           const output = buildToolTraceOutput(toolPart, status, !previous || !previous.output);
 
-          upsertToolState(bufferKey, toolKey, {
+           upsertToolState(bufferKey, toolKey, {
             name: toolName,
             status,
             ...(output ? { output } : {}),
             kind: 'tool',
           }, 'tool');
+
+          // 拦截 FEISHU_SEND_FILE 魔术字符串（tool input 优先，output 兜底）
+          if (status === 'completed' && !processedSendFileRequests.has(toolKey)) {
+            const inputValue = pickFirstDefined(
+              toolPart.input, toolPart.args,
+              state?.input, state?.args
+            );
+            const outputValue = pickFirstDefined(
+              state?.output, state?.result,
+              toolPart.output, toolPart.result
+            );
+            const inputStr = typeof inputValue === 'string' ? inputValue : '';
+            const outputStr = typeof outputValue === 'string' ? outputValue : '';
+
+            const sendFileMatch =
+              inputStr.match(/FEISHU_SEND_FILE\s+(.+)/) ||
+              outputStr.match(/FEISHU_SEND_FILE\s+(.+)/);
+
+            if (sendFileMatch) {
+              processedSendFileRequests.set(toolKey, Date.now());
+              const filePath = sendFileMatch[1].trim();
+              const validation = validateFilePath(filePath);
+              if (!validation.safe) {
+                console.warn(`[BridgeSend] 安全拦截: ${validation.reason}`);
+                feishuClient.sendText(chatId, `❌ ${validation.reason}`);
+              } else {
+                console.log(`[BridgeSend] 拦截到文件发送: ${filePath} → chat=${chatId}`);
+                sendFileToFeishu({ filePath, chatId }).then(result => {
+                  if (result.success) {
+                    console.log(`[BridgeSend] 发送成功: ${result.fileName} (${result.sendType})`);
+                  } else {
+                    console.error(`[BridgeSend] 发送失败: ${result.error}`);
+                    feishuClient.sendText(chatId, `❌ ${result.error}`);
+                  }
+                }).catch(err => {
+                  console.error('[BridgeSend] 发送异常:', err);
+                });
+              }
+              // TTL 淘汰：清理 5 分钟前的条目，避免全量清空导致重复发送
+              const TTL_MS = 5 * 60 * 1000;
+              const now = Date.now();
+              for (const [key, ts] of processedSendFileRequests) {
+                if (now - ts > TTL_MS) processedSendFileRequests.delete(key);
+              }
+            }
+          }
       }
 
       if (part?.type === 'subtask' && typeof part === 'object') {

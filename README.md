@@ -83,6 +83,7 @@
 | 上下文压缩 | 在飞书直接触发会话 summarize，释放上下文窗口 | `/compact` |
 | Shell 命令透传 | 白名单 `!` 命令通过 OpenCode shell 执行并回显输出 | `!ls`、`!pwd`、`!git status` |
 | 服务端鉴权兼容 | 支持 OpenCode Server Basic Auth，不怕后续默认强制密码 | `OPENCODE_SERVER_USERNAME`、`OPENCODE_SERVER_PASSWORD` |
+| 文件发送到飞书 | AI 可将服务器上的文件/截图直接发送到当前飞书群聊 | `/send_file`、`发送文件` |
 | 部署运维闭环 | 提供部署/升级/检查/后台/systemd 的一体化入口 | `scripts/deploy.*`、`scripts/start.*` |
 
 <a id="效果演示"></a>
@@ -318,6 +319,7 @@ node scripts/deploy.mjs status
 | `OUTPUT_UPDATE_INTERVAL` | 否 | `3000` | 输出刷新间隔（ms） |
 | `ATTACHMENT_MAX_SIZE` | 否 | `52428800` | 附件大小上限（字节） |
 
+
 注意：`TOOL_WHITELIST` 做字符串匹配，权限事件可能使用 `permission` 字段值（例如 `external_directory`），请按实际标识配置。
 
 如果 OpenCode 端开启了 `OPENCODE_SERVER_PASSWORD`，桥接端也必须配置同一组 `OPENCODE_SERVER_USERNAME`/`OPENCODE_SERVER_PASSWORD`，否则会出现 401/403 认证失败。
@@ -414,6 +416,9 @@ node scripts/deploy.mjs status
 | `/compact` | 调用 OpenCode summarize，压缩当前会话上下文 |
 | `!<shell命令>` | 透传白名单 shell 命令（如 `!ls`、`!pwd`、`!mkdir`、`!git status`） |
 | `/create_chat` / `/建群` | 私聊中调出建群卡片（下拉选择后点击“创建群聊”生效） |
+| `/send_file <路径>` | 直接发送指定路径的文件到当前群聊 |
+| `/send_file <描述>` | 让 AI 搜索文件后发送到当前群聊 |
+| `发送文件 <路径或描述>` | 中文自然语言触发文件发送（同上） |
 | `/status` | 查看当前群绑定状态 |
 
 - `!` 透传仅支持白名单命令；`vi`/`vim`/`nano` 等交互式编辑器不会透传。
@@ -491,6 +496,14 @@ node scripts/deploy.mjs status
 - 该命令不做单独清理规则，而是复用生命周期扫描逻辑。
 - 可在不重启进程时，手动触发一次“启动时清理”的同规则兜底扫描。
 
+### 7) 文件发送到飞书（工具事件拦截）
+
+- `/send_file <路径>` 直接调用飞书上传 API，不经过 AI，0 延迟。
+- `/send_file <描述>` 让 AI 搜索文件后执行 `echo FEISHU_SEND_FILE <路径>`，桥接在已有的工具事件流中拦截并发送。
+- 图片（.png/.jpg/.gif/.webp 等）走图片通道（上限 10MB），其余走文件通道（上限 30MB），与飞书官方限制一致。
+- 内置敏感文件黑名单（.env、id_rsa、.pem 等），防止误发。
+- 拦截使用 tool input 优先匹配（更可靠），output 兜底；基于 toolCallId 去重防止重复发送。
+
 <a id="故障排查"></a>
 ## 🛠️ 故障排查
 
@@ -504,6 +517,10 @@ node scripts/deploy.mjs status
 | `!ls` 等 shell 命令失败 | 当前会话 Agent 是否可用；可先执行 `/agent general` 再重试 |
 | 后台模式无法停止 | `logs/bridge.pid` 是否残留；使用 `node scripts/stop.mjs` 清理 |
 | 私聊首次会推送多条引导消息 | 这是首次流程（建群卡片 + `/help` + `/panel`）；后续会按已绑定会话正常对话 |
+| `/send_file <路径>` 报"文件不存在" | 确认路径正确且为绝对路径；Windows 路径用 `\` 或 `/` 均可 |
+| `/send_file` 报"拒绝发送敏感文件" | 内置安全黑名单拦截了 .env、密钥等敏感文件 |
+| 文件发送失败提示大小超限 | 飞书图片上限 10MB、文件上限 30MB；压缩后重试 |
+| AI 执行 echo 后飞书未收到文件 | 检查日志中 `[BridgeSend]` 是否出现拦截记录；确认 AI 使用了正确格式 `echo FEISHU_SEND_FILE <路径>` |
 <a id="许可证"></a>
 ## 📝 许可证
 

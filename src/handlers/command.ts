@@ -1,6 +1,7 @@
 import { type ParsedCommand, getHelpText } from '../commands/parser.js';
 import { KNOWN_EFFORT_LEVELS, normalizeEffortLevel, type EffortLevel } from '../commands/effort.js';
 import { feishuClient } from '../feishu/client.js';
+import { groupHandler } from './group.js';
 import {
   opencodeClient,
   type OpencodeAgentConfig,
@@ -10,6 +11,7 @@ import {
 import { chatSessionStore } from '../store/chat-session.js';
 import { buildControlCard, buildStatusCard } from '../feishu/cards.js';
 import { modelConfig, userConfig } from '../config.js';
+import { sendFileToFeishu, validateFilePath } from './file-sender.js';
 import { lifecycleHandler } from './lifecycle.js';
 
 const SUPPORTED_ROLE_TOOLS = [
@@ -818,6 +820,10 @@ export class CommandHandler {
         
         case 'sessions':
           await this.handleListSessions(chatId, messageId);
+          break;
+
+        case 'send_file':
+          await this.handleSendFile(chatId, messageId, command.text || '');
           break;
 
         // 其他命令透传
@@ -1656,6 +1662,53 @@ export class CommandHandler {
       messageId,
       `✅ 清理完成\n- 扫描群聊: ${stats.scannedChats} 个\n- 解散群聊: ${stats.disbandedChats} 个\n- 清理会话: ${stats.deletedSessions} 个\n- 跳过删除(受保护): ${stats.skippedProtectedSessions} 个\n- 移除孤儿映射: ${stats.removedOrphanMappings} 个`
     );
+  }
+
+  private async handleSendFile(chatId: string, messageId: string, description: string): Promise<void> {
+    const trimmedDesc = description.trim();
+    if (!trimmedDesc) {
+      await feishuClient.reply(messageId, '请提供文件路径或描述，例如:\n• 直接发送: /send_file /path/to/file.png\n• AI 搜索: /send_file 刚才生成的截图');
+      return;
+    }
+
+    // 路径明确 → 直接发送（不经过 AI）
+    if (this.looksLikeFilePath(trimmedDesc)) {
+      const validation = validateFilePath(trimmedDesc);
+      if (!validation.safe) {
+        await feishuClient.reply(messageId, `❌ ${validation.reason}`);
+        return;
+      }
+      const result = await sendFileToFeishu({ filePath: trimmedDesc, chatId });
+      if (result.success) {
+        await feishuClient.reply(messageId, `✅ 已发送${result.sendType === 'image' ? '图片' : '文件'}: ${result.fileName}`);
+      } else {
+        await feishuClient.reply(messageId, `❌ ${result.error}`);
+      }
+      return;
+    }
+
+    // 描述模糊 → 让 AI 搜索文件并 echo 触发
+    const sessionId = chatSessionStore.getSessionId(chatId);
+    if (!sessionId) {
+      await feishuClient.reply(messageId, '❌ 当前没有活跃的会话，请先发送消息创建会话');
+      return;
+    }
+
+    const prompt = `用户请求将文件发送到飞书群聊。\n\n`
+      + `文件描述: ${trimmedDesc}\n\n`
+      + `请找到对应文件，然后执行:\n`
+      + `echo FEISHU_SEND_FILE <文件的绝对路径>`;
+
+    await groupHandler.dispatchPrompt(sessionId, prompt, chatId, messageId);
+  }
+
+  // 判断是否为绝对路径
+  private looksLikeFilePath(value: string): boolean {
+    // Unix 绝对路径
+    if (value.startsWith('/')) return true;
+    // Windows 绝对路径: C:\, D:/, 等
+    if (/^[A-Za-z]:[/\\]/.test(value)) return true;
+    return false;
   }
 
   // 公开以供外部调用（如消息撤回事件）
