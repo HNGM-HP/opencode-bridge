@@ -20,6 +20,9 @@ interface ChatSessionData {
   preferredModel?: string; // e.g., "openai:gpt-4"
   preferredAgent?: string;
   preferredEffort?: EffortLevel;
+  resolvedDirectory?: string;
+  projectName?: string;
+  defaultDirectory?: string;
   interactionHistory: InteractionRecord[];
 }
 
@@ -40,6 +43,8 @@ export interface InteractionRecord {
 export interface SessionBindingOptions {
   protectSessionDelete?: boolean;
   chatType?: ChatSessionType;
+  resolvedDirectory?: string;
+  projectName?: string;
 }
 
 // 存储文件路径
@@ -95,6 +100,16 @@ class ChatSessionStore {
   // 获取会话详细信息
   getSession(chatId: string): ChatSessionData | undefined {
     return this.data.get(chatId);
+  }
+
+  // 获取所有已知的工作目录（从 resolvedDirectory 和 defaultDirectory 去重收集）
+  getKnownDirectories(): string[] {
+    const dirs = new Set<string>();
+    for (const data of this.data.values()) {
+      if (data.resolvedDirectory) dirs.add(data.resolvedDirectory);
+      if (data.defaultDirectory) dirs.add(data.defaultDirectory);
+    }
+    return [...dirs];
   }
   
   // 通过 SessionID 反查 ChatID
@@ -169,6 +184,13 @@ class ChatSessionStore {
       title,
       ...(resolvedChatType ? { chatType: resolvedChatType } : {}),
       ...(options?.protectSessionDelete ? { protectSessionDelete: true } : {}),
+      ...(options?.resolvedDirectory ? { resolvedDirectory: options.resolvedDirectory } : {}),
+      ...(options?.projectName ? { projectName: options.projectName } : {}),
+      // 保留群级配置（不随会话重绑丢失）
+      ...(current?.defaultDirectory ? { defaultDirectory: current.defaultDirectory } : {}),
+      ...(current?.preferredModel ? { preferredModel: current.preferredModel } : {}),
+      ...(current?.preferredAgent ? { preferredAgent: current.preferredAgent } : {}),
+      ...(current?.preferredEffort ? { preferredEffort: current.preferredEffort } : {}),
       interactionHistory: [],
     };
     this.data.set(chatId, data);
@@ -241,7 +263,15 @@ class ChatSessionStore {
   }
 
   // 更新会话配置 (模型/角色/强度)
-  updateConfig(chatId: string, config: { preferredModel?: string; preferredAgent?: string; preferredEffort?: EffortLevel }): void {
+  updateConfig(
+    chatId: string,
+    config: {
+      preferredModel?: string;
+      preferredAgent?: string;
+      preferredEffort?: EffortLevel;
+      defaultDirectory?: string;
+    }
+  ): void {
     const session = this.data.get(chatId);
     if (session) {
       if ('preferredModel' in config) {
@@ -267,6 +297,23 @@ class ChatSessionStore {
           delete session.preferredEffort;
         }
       }
+
+      if ('defaultDirectory' in config) {
+        if (config.defaultDirectory) {
+          session.defaultDirectory = config.defaultDirectory;
+        } else {
+          delete session.defaultDirectory;
+        }
+      }
+      this.save();
+    }
+  }
+
+  // 更新会话的工作目录缓存（不影响其他字段）
+  updateResolvedDirectory(chatId: string, directory: string): void {
+    const session = this.data.get(chatId);
+    if (session) {
+      session.resolvedDirectory = directory;
       this.save();
     }
   }

@@ -10,6 +10,7 @@ export type CommandType =
   | 'agent'        // 切换Agent
   | 'role'         // 角色相关操作
   | 'session'      // 会话操作
+  | 'project'      // 项目/目录操作
   | 'sessions'     // 列出会话
   | 'clear'        // 清空对话
   | 'panel'        // 控制面板
@@ -31,6 +32,9 @@ export interface ParsedCommand {
   roleSpec?: string;
   sessionAction?: 'new' | 'switch' | 'list';
   sessionId?: string;      // session switch的目标ID
+  sessionDirectory?: string;
+  projectAction?: 'list' | 'default_set' | 'default_clear' | 'default_show';
+  projectValue?: string;
   clearScope?: 'all' | 'free_session'; // 清理范围
   permissionResponse?: 'y' | 'n' | 'yes' | 'no';
   commandName?: string;    // 透传命令名称
@@ -208,7 +212,12 @@ export function parseCommand(text: string): ParsedCommand {
           return { type: 'session', sessionAction: 'list' };
         }
         if (args[0].toLowerCase() === 'new') {
-          return { type: 'session', sessionAction: 'new' };
+          const sessionDirectory = args.slice(1).join(' ').trim();
+          return {
+            type: 'session',
+            sessionAction: 'new',
+            ...(sessionDirectory ? { sessionDirectory } : {}),
+          };
         }
         // 切换到指定会话
         return { type: 'session', sessionAction: 'switch', sessionId: args[0] };
@@ -216,6 +225,33 @@ export function parseCommand(text: string): ParsedCommand {
       case 'sessions':
       case 'list':
         return { type: 'sessions' };
+
+      case 'project':
+        if (args.length === 0) {
+          return { type: 'project', projectAction: 'list' };
+        }
+        if (args[0].toLowerCase() === 'list') {
+          return { type: 'project', projectAction: 'list' };
+        }
+        if (args[0].toLowerCase() === 'default') {
+          if (args.length === 1) {
+            return { type: 'project', projectAction: 'default_show' };
+          }
+          const action = args[1].toLowerCase();
+          if (action === 'set') {
+            const projectValue = args.slice(2).join(' ').trim();
+            return {
+              type: 'project',
+              projectAction: 'default_set',
+              ...(projectValue ? { projectValue } : {}),
+            };
+          }
+          if (action === 'clear') {
+            return { type: 'project', projectAction: 'default_clear' };
+          }
+          return { type: 'project', projectAction: 'default_show' };
+        }
+        return { type: 'project' };
 
       case 'clear':
       case 'reset':
@@ -330,9 +366,13 @@ export function getHelpText(): string {
 ⚙️ **会话管理**
 • \`/create_chat\` 或 \`/建群\` 打开建群卡片（下拉选择新建或绑定已有会话）
 • \`/session\` 列出全部会话（含未绑定与仅本地映射记录）
-• \`/session new\` 开启新话题 (重置上下文)
+• \`/session new\` 或 \`/session new <项目别名或绝对路径>\` 开启新话题 (重置上下文)
 • \`/session <sessionId>\` 手动绑定已有会话（需开启 \`ENABLE_MANUAL_SESSION_BIND\`）
 • \`新建会话窗口\` 自然语言触发 \`/session new\`
+• \`/project list\` 列出可用项目（含别名与历史目录）
+• \`/project default\` 查看当前群默认项目
+• \`/project default set <项目名或路径>\` 设置当前群默认项目
+• \`/project default clear\` 清除当前群默认项目
 • \`/clear\` 清空当前上下文 (同上)
 • \`/clear free session\` 清理所有空闲/无人群聊
 • \`/status\` 查看连接状态
