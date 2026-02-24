@@ -495,11 +495,12 @@ export class P2PHandler {
     selectedSessionId: string,
     chatId?: string,
     messageId?: string,
-    rawDirectory?: string
+    rawDirectory?: string,
+    customChatName?: string
   ): Promise<void> {
     const bindExistingSession = selectedSessionId !== CREATE_CHAT_NEW_SESSION_VALUE;
     if (bindExistingSession && !userConfig.enableManualSessionBind) {
-      await this.safeReply(messageId, chatId, '❌ 当前环境未开启“绑定已有会话”能力');
+      await this.safeReply(messageId, chatId, '❌ 当前环境未开启"绑定已有会话"能力');
       return;
     }
 
@@ -516,7 +517,8 @@ export class P2PHandler {
 
     console.log(`[P2P] 用户 ${openId} 请求创建新会话群，模式=${bindExistingSession ? '绑定已有会话' : '新建会话'}`);
 
-    const chatName = `OpenCode会话-${Date.now().toString().slice(-4)}`;
+    // 使用用户指定的群名，或自动生成
+    const chatName = customChatName || `会话-${Date.now().toString().slice(-6)}`;
     const createResult = await feishuClient.createChat(chatName, [openId], '由 OpenCode 自动创建的会话群');
     if (!createResult.chatId) {
       await this.safeReply(messageId, chatId, '❌ 创建群聊失败，请重试');
@@ -710,6 +712,9 @@ export class P2PHandler {
         || this.getRememberedCreateChatDirectoryInput(chatId, messageId, openId)
         || '';
 
+      // 读取用户输入的群名（可选）
+      const customChatName = formValue?.chat_name?.trim() || undefined;
+
       const rawDirectory = selectedProject && selectedProject !== '__default__'
         ? selectedProject
         : (customPath || undefined);
@@ -717,7 +722,7 @@ export class P2PHandler {
       this.clearCreateChatSelection(chatId, messageId, openId);
       this.clearCreateChatProjectSelection(chatId, messageId, openId);
       this.clearCreateChatDirectoryInput(chatId, messageId, openId);
-      await this.createGroupWithSessionSelection(openId, selectedSessionId, chatId, messageId, rawDirectory);
+      await this.createGroupWithSessionSelection(openId, selectedSessionId, chatId, messageId, rawDirectory, customChatName);
       return;
     }
   }

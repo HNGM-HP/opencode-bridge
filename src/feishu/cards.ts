@@ -474,6 +474,7 @@ export interface CreateChatCardData {
   manualBindEnabled: boolean;
   projectOptions?: Array<{ name: string; directory: string; source: 'alias' | 'history' }>;
   allowCustomPath?: boolean;
+  chatNameInput?: string;  // 用户输入的群名称（用于回显）
 }
 
 function resolveCreateChatCardState(data: CreateChatCardData): {
@@ -556,8 +557,18 @@ function buildCreateChatSelectorElements(data: CreateChatCardData): object[] {
     });
   }
 
-  // 使用 form 容器包裹路径输入和提交按钮，确保 input 值能通过 form_value 传递
+  // 使用 form 容器包裹群名、路径输入和提交按钮，确保 input 值能通过 form_value 传递
   const formElements: object[] = [];
+
+  // 群名输入框（始终显示，可选填写）
+  formElements.push({
+    tag: 'input',
+    name: 'chat_name',
+    placeholder: { tag: 'plain_text', content: '自定义群名称（可选，留空自动生成）' },
+    label: { tag: 'plain_text', content: '群名称:' },
+    label_position: 'top' as const,
+    ...(data.chatNameInput ? { default_value: data.chatNameInput } : {}),
+  });
 
   if (data.allowCustomPath) {
     formElements.push({
