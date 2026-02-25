@@ -756,7 +756,7 @@ export class CommandHandler {
           console.log(`[Command] clear 命令, clearScope=${command.clearScope}`);
           if (command.clearScope === 'free_session') {
             // 清理空闲群聊
-            await this.handleClearFreeSession(chatId, messageId);
+            await this.handleClearFreeSession(chatId, messageId, command.clearSessionId);
           } else {
             // 清空当前对话上下文（默认行为）
             await this.handleNewSession(chatId, messageId, context.senderId, context.chatType); 
@@ -857,7 +857,10 @@ export class CommandHandler {
     
     if (session) {
       // 2. 更新绑定
-      chatSessionStore.setSession(chatId, session.id, userId, title, { chatType });
+      chatSessionStore.setSession(chatId, session.id, userId, title, {
+        chatType,
+        sessionDirectory: session.directory,
+      });
       await feishuClient.reply(messageId, `✅ 已创建新会话窗口\nID: ${session.id}`);
     } else {
       await feishuClient.reply(messageId, '❌ 创建会话失败');
@@ -882,8 +885,7 @@ export class CommandHandler {
       return;
     }
 
-    const sessions = await opencodeClient.listSessions();
-    const targetSession = sessions.find(item => item.id === normalizedSessionId);
+    const targetSession = await opencodeClient.findSessionAcrossProjects(normalizedSessionId);
     if (!targetSession) {
       await feishuClient.reply(messageId, `❌ 未找到会话: ${normalizedSessionId}`);
       return;
@@ -904,7 +906,11 @@ export class CommandHandler {
       normalizedSessionId,
       userId,
       title,
-      { protectSessionDelete: true, chatType }
+      {
+        protectSessionDelete: true,
+        chatType,
+        sessionDirectory: targetSession.directory,
+      }
     );
 
     const replyLines = [
@@ -923,19 +929,13 @@ export class CommandHandler {
     let sessions: Awaited<ReturnType<typeof opencodeClient.listSessions>> = [];
     let opencodeUnavailable = false;
     try {
-      sessions = await opencodeClient.listSessions();
+      sessions = await opencodeClient.listSessionsAcrossProjects();
     } catch (error) {
       opencodeUnavailable = true;
       console.warn('[Command] 拉取 OpenCode 会话失败，回退到本地映射列表:', error);
     }
 
-    const sortedSessions = [...sessions].sort((left, right) => {
-      const rightTime = right.time?.updated ?? right.time?.created ?? 0;
-      const leftTime = left.time?.updated ?? left.time?.created ?? 0;
-      return rightTime - leftTime;
-    });
-
-    const localBindings = new Map<string, { chatIds: string[]; title?: string }>();
+    const localBindings = new Map<string, { chatIds: string[]; title?: string; sessionDirectory?: string }>();
     for (const boundChatId of chatSessionStore.getAllChatIds()) {
       const binding = chatSessionStore.getSession(boundChatId);
       if (!binding?.sessionId) continue;
@@ -946,23 +946,43 @@ export class CommandHandler {
         if (!existing.title && binding.title) {
           existing.title = binding.title;
         }
+        if (!existing.sessionDirectory && binding.sessionDirectory) {
+          existing.sessionDirectory = binding.sessionDirectory;
+        }
         continue;
       }
 
       localBindings.set(binding.sessionId, {
         chatIds: [boundChatId],
         title: binding.title,
+        ...(binding.sessionDirectory ? { sessionDirectory: binding.sessionDirectory } : {}),
       });
     }
 
-    const tableHeader = 'SessionID | OpenCode侧会话名称 | 绑定群明细 | 当前会话状态';
-    const rows: string[] = [];
-    for (const session of sortedSessions) {
+    interface SessionListRow {
+      directory: string;
+      title: string;
+      sessionId: string;
+      chatDetail: string;
+      status: string;
+      statusRank: number;
+    }
+
+    const rows: SessionListRow[] = [];
+    for (const session of sessions) {
       const bindingInfo = localBindings.get(session.id);
       const title = session.title && session.title.trim().length > 0 ? session.title.trim() : '未命名会话';
+      const directory = session.directory && session.directory.trim().length > 0 ? session.directory.trim() : '-';
       const chatDetail = bindingInfo ? bindingInfo.chatIds.join(', ') : '无';
       const status = bindingInfo ? 'OpenCode可用/已绑定' : 'OpenCode可用/未绑定';
-      rows.push(`${session.id} | ${title} | ${chatDetail} | ${status}`);
+      rows.push({
+        directory,
+        title,
+        sessionId: session.id,
+        chatDetail,
+        status,
+        statusRank: bindingInfo ? 0 : 1,
+      });
       localBindings.delete(session.id);
     }
 
@@ -970,10 +990,55 @@ export class CommandHandler {
       const localTitle = bindingInfo.title && bindingInfo.title.trim().length > 0
         ? bindingInfo.title.trim()
         : '本地绑定记录';
-      rows.push(`${sessionId} | ${localTitle} | ${bindingInfo.chatIds.join(', ')} | 仅本地映射(可能已失活)`);
+      const localDirectory = bindingInfo.sessionDirectory && bindingInfo.sessionDirectory.trim().length > 0
+        ? bindingInfo.sessionDirectory.trim()
+        : '-';
+      rows.push({
+        directory: localDirectory,
+        title: localTitle,
+        sessionId,
+        chatDetail: bindingInfo.chatIds.join(', '),
+        status: '仅本地映射(可能已失活)',
+        statusRank: 2,
+      });
     }
 
-    if (rows.length === 0) {
+    const normalizeDirectoryForSort = (directory: string): string => {
+      const normalized = directory.trim();
+      if (!normalized || normalized === '-') {
+        return '\uffff';
+      }
+      return normalized;
+    };
+
+    rows.sort((left, right) => {
+      const directoryCompare = normalizeDirectoryForSort(left.directory).localeCompare(
+        normalizeDirectoryForSort(right.directory),
+        'zh-Hans-CN'
+      );
+      if (directoryCompare !== 0) {
+        return directoryCompare;
+      }
+
+      if (left.statusRank !== right.statusRank) {
+        return left.statusRank - right.statusRank;
+      }
+
+      const titleCompare = left.title.localeCompare(right.title, 'zh-Hans-CN');
+      if (titleCompare !== 0) {
+        return titleCompare;
+      }
+
+      return left.sessionId.localeCompare(right.sessionId, 'en');
+    });
+
+    const tableHeader = '工作区目录 | SessionID | OpenCode侧会话名称 | 绑定群明细 | 当前会话状态';
+    const rowTexts: string[] = [];
+    for (const row of rows) {
+      rowTexts.push(`${row.directory} | ${row.sessionId} | ${row.title} | ${row.chatDetail} | ${row.status}`);
+    }
+
+    if (rowTexts.length === 0) {
       const emptyMessage = opencodeUnavailable
         ? 'OpenCode 暂不可达，且当前无本地会话映射记录'
         : '当前无可用会话记录';
@@ -983,7 +1048,7 @@ export class CommandHandler {
 
     const rowChunks: string[] = [];
     let currentRows = '';
-    for (const row of rows) {
+    for (const row of rowTexts) {
       if ((tableHeader.length + currentRows.length + row.length + 2) > 3000 && currentRows.length > 0) {
         rowChunks.push(currentRows.trimEnd());
         currentRows = '';
@@ -1001,7 +1066,7 @@ export class CommandHandler {
       return;
     }
 
-    const totalCount = rows.length;
+    const totalCount = rowTexts.length;
     const header = opencodeUnavailable
       ? `📚 会话列表（总计 ${totalCount}，OpenCode 暂不可达，仅展示本地映射）`
       : `📚 会话列表（总计 ${totalCount}）`;
@@ -1031,7 +1096,10 @@ export class CommandHandler {
          const title = `群聊会话-${chatId.slice(-4)}`;
           const newSession = await opencodeClient.createSession(title);
           if (newSession) {
-              chatSessionStore.setSession(chatId, newSession.id, userId, title, { chatType });
+              chatSessionStore.setSession(chatId, newSession.id, userId, title, {
+                chatType,
+                sessionDirectory: newSession.directory,
+              });
               session = chatSessionStore.getSession(chatId);
           } else {
              await feishuClient.reply(messageId, '❌ 无法创建会话以保存配置');
@@ -1129,7 +1197,10 @@ export class CommandHandler {
         const title = `群聊会话-${chatId.slice(-4)}`;
         const newSession = await opencodeClient.createSession(title);
         if (newSession) {
-          chatSessionStore.setSession(chatId, newSession.id, userId, title, { chatType });
+          chatSessionStore.setSession(chatId, newSession.id, userId, title, {
+            chatType,
+            sessionDirectory: newSession.directory,
+          });
           session = chatSessionStore.getSession(chatId);
         } else {
           await feishuClient.reply(messageId, '❌ 无法创建会话以保存强度配置');
@@ -1344,7 +1415,10 @@ export class CommandHandler {
         await feishuClient.reply(messageId, '❌ 无法创建会话以保存角色设置');
         return;
       }
-      chatSessionStore.setSession(chatId, newSession.id, userId, title, { chatType });
+      chatSessionStore.setSession(chatId, newSession.id, userId, title, {
+        chatType,
+        sessionDirectory: newSession.directory,
+      });
       session = chatSessionStore.getSession(chatId);
     }
 
@@ -1409,7 +1483,10 @@ export class CommandHandler {
         const title = `群聊会话-${chatId.slice(-4)}`;
         const newSession = await opencodeClient.createSession(title);
         if (newSession) {
-          chatSessionStore.setSession(chatId, newSession.id, userId, title, { chatType });
+          chatSessionStore.setSession(chatId, newSession.id, userId, title, {
+            chatType,
+            sessionDirectory: newSession.directory,
+          });
           session = chatSessionStore.getSession(chatId);
         } else {
           await feishuClient.reply(messageId, '❌ 无法创建会话以保存配置');
@@ -1648,7 +1725,57 @@ export class CommandHandler {
     return `${merged.slice(0, maxLength)}\n\n...（输出过长，已截断）`;
   }
 
-  private async handleClearFreeSession(chatId: string, messageId: string): Promise<void> {
+  private async handleClearFreeSession(chatId: string, messageId: string, targetSessionId?: string): Promise<void> {
+    const normalizedTargetSessionId = typeof targetSessionId === 'string' ? targetSessionId.trim() : '';
+    if (normalizedTargetSessionId) {
+      await feishuClient.reply(messageId, `🧹 正在删除指定会话: ${normalizedTargetSessionId} ...`);
+
+      const targetSession = await opencodeClient.findSessionAcrossProjects(normalizedTargetSessionId);
+      if (!targetSession) {
+        await feishuClient.reply(messageId, `❌ 未找到会话: ${normalizedTargetSessionId}`);
+        return;
+      }
+
+      const boundChatIds: string[] = [];
+      let protectedBindingCount = 0;
+      for (const boundChatId of chatSessionStore.getAllChatIds()) {
+        const binding = chatSessionStore.getSession(boundChatId);
+        if (binding?.sessionId !== normalizedTargetSessionId) {
+          continue;
+        }
+
+        boundChatIds.push(boundChatId);
+        if (chatSessionStore.isSessionDeleteProtected(boundChatId)) {
+          protectedBindingCount += 1;
+        }
+      }
+
+      const deleted = await opencodeClient.deleteSession(normalizedTargetSessionId, {
+        directory: targetSession.directory,
+      });
+      if (!deleted) {
+        await feishuClient.reply(messageId, `❌ 删除会话失败: ${normalizedTargetSessionId}`);
+        return;
+      }
+
+      for (const boundChatId of boundChatIds) {
+        chatSessionStore.removeSession(boundChatId);
+      }
+
+      const lines = [
+        '✅ 指定会话已删除',
+        `- 工作区目录: ${targetSession.directory || '-'}`,
+        `- 会话ID: ${normalizedTargetSessionId}`,
+        `- 清理本地映射: ${boundChatIds.length} 个群`,
+      ];
+      if (protectedBindingCount > 0) {
+        lines.push(`- 删除保护映射: ${protectedBindingCount} 个（手动删除已强制执行）`);
+      }
+
+      await feishuClient.reply(messageId, lines.join('\n'));
+      return;
+    }
+
     await feishuClient.reply(messageId, '🧹 正在扫描并清理无效群聊...');
     const stats = await lifecycleHandler.runCleanupScan();
 

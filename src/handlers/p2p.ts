@@ -113,20 +113,38 @@ export class P2PHandler {
     }
   }
 
-  private getSessionOptionLabel(session: OpencodeSession): string {
+  private getSessionDirectory(session: OpencodeSession): string {
+    return typeof session.directory === 'string' && session.directory.trim().length > 0
+      ? session.directory.trim()
+      : '/';
+  }
+
+  private getSessionOptionLabel(session: OpencodeSession, highlightWorkspace: boolean): string {
     const title = typeof session.title === 'string' && session.title.trim().length > 0
       ? session.title.trim()
       : '未命名会话';
     const compactTitle = title.length > 24 ? `${title.slice(0, 24)}...` : title;
+    const directory = this.getSessionDirectory(session);
+    const compactDirectory = directory.length > 18 ? `...${directory.slice(-18)}` : directory;
     const shortId = session.id.slice(0, 8);
-    return `${compactTitle} (${shortId})`;
+    const workspaceLabel = highlightWorkspace ? `【${compactDirectory}】` : compactDirectory;
+    return `${workspaceLabel} / ${shortId} / ${compactTitle}`;
   }
 
-  private sortSessionsByUpdateTime(sessions: OpencodeSession[]): OpencodeSession[] {
+  private sortSessionsForCreateChat(sessions: OpencodeSession[]): OpencodeSession[] {
     return [...sessions].sort((a, b) => {
+      const directoryCompare = this.getSessionDirectory(a).localeCompare(this.getSessionDirectory(b), 'zh-Hans-CN');
+      if (directoryCompare !== 0) {
+        return directoryCompare;
+      }
+
       const left = b.time?.updated ?? b.time?.created ?? 0;
       const right = a.time?.updated ?? a.time?.created ?? 0;
-      return left - right;
+      if (left !== right) {
+        return left - right;
+      }
+
+      return a.id.localeCompare(b.id, 'en');
     });
   }
 
@@ -141,14 +159,17 @@ export class P2PHandler {
     let totalSessionCount = 0;
     if (userConfig.enableManualSessionBind) {
       try {
-        const sessions = this.sortSessionsByUpdateTime(await opencodeClient.listSessions());
+        const sessions = this.sortSessionsForCreateChat(await opencodeClient.listSessionsAcrossProjects());
         totalSessionCount = sessions.length;
 
+        let previousDirectory = '';
         for (const session of sessions.slice(0, CREATE_CHAT_EXISTING_LIMIT)) {
+          const directory = this.getSessionDirectory(session);
           sessionOptions.push({
-            label: this.getSessionOptionLabel(session),
+            label: this.getSessionOptionLabel(session, directory !== previousDirectory),
             value: session.id,
           });
+          previousDirectory = directory;
         }
       } catch (error) {
         console.warn('[P2P] 加载 OpenCode 会话列表失败，建群卡片将仅显示新建选项:', error);
@@ -212,8 +233,8 @@ export class P2PHandler {
 
   private async isSessionMissingInOpenCode(sessionId: string): Promise<boolean> {
     try {
-      const sessions = await opencodeClient.listSessions();
-      return !sessions.some(session => session.id === sessionId);
+      const session = await opencodeClient.findSessionAcrossProjects(sessionId);
+      return !session;
     } catch (error) {
       console.warn('[P2P] 校验会话存在性失败，保持当前绑定:', error);
       return false;
@@ -237,7 +258,10 @@ export class P2PHandler {
     try {
       const sessionTitle = this.getPrivateSessionTitle(senderId);
       const session = await opencodeClient.createSession(sessionTitle);
-      chatSessionStore.setSession(chatId, session.id, senderId, sessionTitle, { chatType: 'p2p' });
+      chatSessionStore.setSession(chatId, session.id, senderId, sessionTitle, {
+        chatType: 'p2p',
+        sessionDirectory: session.directory,
+      });
       return {
         firstBinding: true,
       };
@@ -356,8 +380,7 @@ export class P2PHandler {
 
   private async findSessionById(sessionId: string): Promise<OpencodeSession | null> {
     try {
-      const sessions = await opencodeClient.listSessions();
-      return sessions.find(session => session.id === sessionId) || null;
+      return await opencodeClient.findSessionAcrossProjects(sessionId);
     } catch (error) {
       console.warn('[P2P] 查询 OpenCode 会话列表失败:', error);
       return null;
@@ -399,6 +422,7 @@ export class P2PHandler {
 
     let targetSessionId = '';
     let sessionTitle = `飞书群聊: ${chatName}`;
+    let sessionDirectory: string | undefined;
     let protectSessionDelete = false;
 
     if (bindExistingSession) {
@@ -411,6 +435,7 @@ export class P2PHandler {
 
       targetSessionId = selectedSession.id;
       sessionTitle = selectedSession.title || sessionTitle;
+      sessionDirectory = selectedSession.directory;
       protectSessionDelete = true;
     } else {
       const session = await opencodeClient.createSession(sessionTitle);
@@ -420,6 +445,7 @@ export class P2PHandler {
         return;
       }
       targetSessionId = session.id;
+      sessionDirectory = session.directory;
     }
 
     const previousChatId = chatSessionStore.getChatId(targetSessionId);
@@ -433,7 +459,11 @@ export class P2PHandler {
       targetSessionId,
       openId,
       sessionTitle,
-      { protectSessionDelete, chatType: 'group' }
+      {
+        protectSessionDelete,
+        chatType: 'group',
+        sessionDirectory,
+      }
     );
     console.log(`[P2P] 已绑定会话: Chat=${newChatId}, Session=${targetSessionId}`);
 

@@ -31,6 +31,7 @@ export interface ParsedCommand {
   sessionAction?: 'new' | 'switch' | 'list';
   sessionId?: string;      // session switch的目标ID
   clearScope?: 'all' | 'free_session'; // 清理范围
+  clearSessionId?: string;
   permissionResponse?: 'y' | 'n' | 'yes' | 'no';
   commandName?: string;    // 透传命令名称
   commandArgs?: string;    // 透传命令参数
@@ -213,9 +214,28 @@ export function parseCommand(text: string): ParsedCommand {
       case 'clear':
       case 'reset':
         if (args.length > 0 && args[0].toLowerCase() === 'free' && args[1]?.toLowerCase() === 'session') {
-          return { type: 'clear', clearScope: 'free_session' };
+          return {
+            type: 'clear',
+            clearScope: 'free_session',
+            ...(args[2] ? { clearSessionId: args[2] } : {}),
+          };
+        }
+        if (args.length > 0 && args[0].toLowerCase() === 'free_session') {
+          return {
+            type: 'clear',
+            clearScope: 'free_session',
+            ...(args[1] ? { clearSessionId: args[1] } : {}),
+          };
         }
         return { type: 'clear' };
+
+      case 'clear_free_session':
+      case 'clear-free-session':
+        return {
+          type: 'clear',
+          clearScope: 'free_session',
+          ...(args[0] ? { clearSessionId: args[0] } : {}),
+        };
 
       case 'panel':
       case 'controls':
@@ -316,13 +336,14 @@ export function getHelpText(): string {
 • \`/compact\` 压缩当前会话上下文（调用 OpenCode summarize）
 
 ⚙️ **会话管理**
-• \`/create_chat\` 或 \`/建群\` 打开建群卡片（下拉选择新建或绑定已有会话）
-• \`/session\` 列出全部会话（含未绑定与仅本地映射记录）
+• \`/create_chat\` 或 \`/建群\` 打开建群卡片（下拉按 工作区/Session短ID/简介 展示，支持跨工作区）
+• \`/session\` 列出全部工作区会话（含未绑定与仅本地映射记录）
 • \`/session new\` 开启新话题 (重置上下文)
-• \`/session <sessionId>\` 手动绑定已有会话（需开启 \`ENABLE_MANUAL_SESSION_BIND\`）
+• \`/session <sessionId>\` 手动绑定已有会话（支持 Web 端会话，需开启 \`ENABLE_MANUAL_SESSION_BIND\`）
 • \`新建会话窗口\` 自然语言触发 \`/session new\`
 • \`/clear\` 清空当前上下文 (同上)
-• \`/clear free session\` 清理所有空闲/无人群聊
+• \`/clear free session\` 或 \`/clear_free_session\` 清理所有空闲/无人群聊
+• \`/clear free session <sessionId>\` 或 \`/clear_free_session <sessionId>\` 删除指定 OpenCode 会话并移除本地映射
 • \`/status\` 查看连接状态
 
 💡 **提示**

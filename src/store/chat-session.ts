@@ -8,6 +8,7 @@ export type ChatSessionType = 'p2p' | 'group';
 interface ChatSessionData {
   chatId: string;
   sessionId: string;
+  sessionDirectory?: string;
   creatorId: string; // 创建者ID
   createdAt: number;
   title?: string;
@@ -40,6 +41,7 @@ export interface InteractionRecord {
 export interface SessionBindingOptions {
   protectSessionDelete?: boolean;
   chatType?: ChatSessionType;
+  sessionDirectory?: string;
 }
 
 // 存储文件路径
@@ -164,6 +166,7 @@ class ChatSessionStore {
     const data: ChatSessionData = {
       chatId,
       sessionId,
+      ...(options?.sessionDirectory?.trim() ? { sessionDirectory: options.sessionDirectory.trim() } : {}),
       creatorId,
       createdAt: Date.now(),
       title,

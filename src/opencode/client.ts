@@ -1,5 +1,5 @@
 import { createOpencodeClient, type OpencodeClient as SdkOpencodeClient } from '@opencode-ai/sdk';
-import type { Session, Message, Part } from '@opencode-ai/sdk';
+import type { Session, Message, Part, Project } from '@opencode-ai/sdk';
 import { opencodeConfig, modelConfig } from '../config.js';
 import { EventEmitter } from 'events';
 
@@ -245,6 +245,10 @@ export interface OpencodeRuntimeConfig {
 export interface ShellExecutionResult {
   info?: Message;
   parts: Part[];
+}
+
+export interface SessionQueryOptions {
+  directory?: string;
 }
 
 function parseBoolean(value: unknown): boolean | undefined {
@@ -575,6 +579,15 @@ class OpencodeClientWrapper extends EventEmitter {
     return undefined;
   }
 
+  private normalizeDirectory(directory?: string): string | undefined {
+    if (typeof directory !== 'string') {
+      return undefined;
+    }
+
+    const normalized = directory.trim();
+    return normalized.length > 0 ? normalized : undefined;
+  }
+
   // 发送消息并等待响应
   async sendMessage(
     sessionId: string,
@@ -869,11 +882,143 @@ class OpencodeClientWrapper extends EventEmitter {
     }
   }
 
-  // 获取会话列表
-  async listSessions(): Promise<Session[]> {
+  // 获取工作区列表
+  async listProjects(options?: SessionQueryOptions): Promise<Project[]> {
     const client = this.getClient();
-    const result = await client.session.list();
-    return result.data || [];
+    const directory = this.normalizeDirectory(options?.directory);
+    const result = await client.project.list(
+      directory ? { query: { directory } } : undefined
+    );
+    return Array.isArray(result.data) ? result.data : [];
+  }
+
+  // 获取会话列表（可按目录过滤）
+  async listSessions(options?: SessionQueryOptions): Promise<Session[]> {
+    const client = this.getClient();
+    const directory = this.normalizeDirectory(options?.directory);
+    const result = await client.session.list(
+      directory ? { query: { directory } } : undefined
+    );
+    return Array.isArray(result.data) ? result.data : [];
+  }
+
+  // 跨工作区聚合会话列表
+  async listSessionsAcrossProjects(): Promise<Session[]> {
+    const merged = new Map<string, Session>();
+    const upsertSessions = (sessions: Session[]): void => {
+      for (const session of sessions) {
+        const existing = merged.get(session.id);
+        if (!existing) {
+          merged.set(session.id, session);
+          continue;
+        }
+
+        const existingUpdated = existing.time?.updated ?? existing.time?.created ?? 0;
+        const nextUpdated = session.time?.updated ?? session.time?.created ?? 0;
+        if (nextUpdated >= existingUpdated) {
+          merged.set(session.id, session);
+        }
+      }
+    };
+
+    try {
+      upsertSessions(await this.listSessions());
+    } catch (error) {
+      console.warn('[OpenCode] 获取默认作用域会话列表失败:', error);
+    }
+
+    const projects = await this.listProjects();
+    const directories: string[] = [];
+    const seenDirectories = new Set<string>();
+    for (const project of projects) {
+      const normalized = this.normalizeDirectory(project.worktree);
+      if (!normalized || seenDirectories.has(normalized)) {
+        continue;
+      }
+      seenDirectories.add(normalized);
+      directories.push(normalized);
+    }
+
+    const sessionGroups = await Promise.all(
+      directories.map(async directory => {
+        try {
+          return await this.listSessions({ directory });
+        } catch (error) {
+          console.warn(`[OpenCode] 获取目录会话列表失败: directory=${directory}`, error);
+          return [] as Session[];
+        }
+      })
+    );
+
+    for (const sessions of sessionGroups) {
+      upsertSessions(sessions);
+    }
+
+    return Array.from(merged.values());
+  }
+
+  // 通过 ID 获取会话（可按目录限定）
+  async getSessionById(sessionId: string, options?: SessionQueryOptions): Promise<Session | null> {
+    const client = this.getClient();
+    const normalizedSessionId = sessionId.trim();
+    if (!normalizedSessionId) {
+      return null;
+    }
+
+    const directory = this.normalizeDirectory(options?.directory);
+    const result = await client.session.get({
+      path: { id: normalizedSessionId },
+      ...(directory ? { query: { directory } } : {}),
+    });
+
+    if (result.error) {
+      const statusCode = result.response?.status;
+      if (statusCode === 404) {
+        return null;
+      }
+
+      const detail = formatSdkError(result.error);
+      const message = statusCode
+        ? `获取会话失败（HTTP ${statusCode}）: ${detail}`
+        : `获取会话失败: ${detail}`;
+      throw new Error(appendAuthHint(message, statusCode));
+    }
+
+    return result.data || null;
+  }
+
+  // 跨工作区按 ID 查找会话
+  async findSessionAcrossProjects(sessionId: string): Promise<Session | null> {
+    const normalizedSessionId = sessionId.trim();
+    if (!normalizedSessionId) {
+      return null;
+    }
+
+    const direct = await this.getSessionById(normalizedSessionId);
+    if (direct) {
+      return direct;
+    }
+
+    const projects = await this.listProjects();
+    const directories: string[] = [];
+    const seenDirectories = new Set<string>();
+    for (const project of projects) {
+      const normalized = this.normalizeDirectory(project.worktree);
+      if (!normalized || seenDirectories.has(normalized)) {
+        continue;
+      }
+      seenDirectories.add(normalized);
+      directories.push(normalized);
+    }
+
+    for (const directory of directories) {
+      const found = await this.getSessionById(normalizedSessionId, { directory });
+      if (found) {
+        return found;
+      }
+    }
+
+    return null;
   }
 
   // 创建新会话
@@ -886,11 +1031,13 @@ class OpencodeClientWrapper extends EventEmitter {
   }
 
   // 删除会话
-  async deleteSession(sessionId: string): Promise<boolean> {
+  async deleteSession(sessionId: string, options?: SessionQueryOptions): Promise<boolean> {
     const client = this.getClient();
     try {
+      const directory = this.normalizeDirectory(options?.directory);
       await client.session.delete({
         path: { id: sessionId },
+        ...(directory ? { query: { directory } } : {}),
       });
       console.log(`[OpenCode] 已删除会话: ${sessionId}`);
       return true;

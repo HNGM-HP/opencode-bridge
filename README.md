@@ -1,4 +1,4 @@
-# 飞书 × OpenCode 桥接服务 v2.7.2 (Group)
+# 飞书 × OpenCode 桥接服务 v2.7.5 (Group)
 
 [![Node.js >= 18](https://img.shields.io/badge/Node.js-%3E%3D18-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
@@ -405,20 +405,23 @@ node scripts/deploy.mjs status
 | `创建角色 名称=...; 描述=...; 类型=...; 工具=...` | 自然语言创建自定义角色并切换 |
 | `/stop` | 中断当前会话执行 |
 | `/undo` | 撤回上一轮交互（OpenCode + 飞书同步） |
-| `/session` | 列出全部会话（含未绑定与仅本地映射记录） |
+| `/session` | 列出全部工作区会话（含未绑定与仅本地映射记录） |
 | `/session new` | 新建会话并重置上下文 |
-| `/session <sessionId>` | 手动绑定已有 OpenCode 会话（需启用 `ENABLE_MANUAL_SESSION_BIND`） |
+| `/session <sessionId>` | 手动绑定已有 OpenCode 会话（支持 Web 端创建的跨工作区会话；需启用 `ENABLE_MANUAL_SESSION_BIND`） |
 | `新建会话窗口` | 自然语言触发新建会话（等价 `/session new`） |
 | `/clear` | 等价于 `/session new` |
-| `/clear free session` | 手动触发一次与启动清理同规则的兜底扫描 |
+| `/clear free session` / `/clear_free_session` | 手动触发一次与启动清理同规则的兜底扫描 |
+| `/clear free session <sessionId>` / `/clear_free_session <sessionId>` | 删除指定 OpenCode 会话，并移除所有本地绑定映射 |
 | `/compact` | 调用 OpenCode summarize，压缩当前会话上下文 |
 | `!<shell命令>` | 透传白名单 shell 命令（如 `!ls`、`!pwd`、`!mkdir`、`!git status`） |
-| `/create_chat` / `/建群` | 私聊中调出建群卡片（下拉选择后点击“创建群聊”生效） |
+| `/create_chat` / `/建群` | 私聊中调出建群卡片（可选跨工作区已有会话；点击“创建群聊”生效） |
 | `/status` | 查看当前群绑定状态 |
 
 - `!` 透传仅支持白名单命令；`vi`/`vim`/`nano` 等交互式编辑器不会透传。
 - 单条临时覆盖可在消息开头使用 `#low` / `#high` / `#max` / `#xhigh`（仅当前条生效）。
 - 强度优先级：`#临时覆盖` > `/effort 会话默认` > 模型默认。
+- `/session` 列表列顺序固定为：`工作区目录 | SessionID | OpenCode侧会话名称 | 绑定群明细 | 当前会话状态`。
+- `/create_chat` 下拉标签顺序固定为：`工作区 / Session短ID / 简介`，并按工作区聚合展示。
 
 <a id="Agent（角色）使用"></a>
 ## 🤖 Agent（角色）使用

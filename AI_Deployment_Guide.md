@@ -180,12 +180,13 @@ sudo node scripts/deploy.mjs service-uninstall
 3. 触发一次权限请求，确认卡片按钮可用。
 4. 触发一次 question 提问，确认可以回复并继续对话。
 5. 执行 `/undo`，确认 OpenCode 和飞书消息都回滚。
-6. 在私聊执行 `/create_chat`，验证下拉选择会话后点击“创建群聊”可按选择生效。
+6. 在私聊执行 `/create_chat`，验证可看到并绑定 Web 端创建的跨工作区会话，点击“创建群聊”按选择生效。
 7. 执行 `/clear free session`，确认行为与“启动后自动扫描清理”一致。
 8. 执行 `/compact`，确认返回“上下文压缩完成”。
 9. 执行 `!ls`，确认 shell 命令可返回输出。
 10. 执行 `/effort` 与 `/effort high`，确认会话强度可查询/设置。
 11. 发送 `#xhigh 请分析这段代码` 后再执行 `/effort`，确认 `#` 仅临时覆盖，不改变会话默认强度。
+12. 执行 `/clear_free_session <sessionId>`，确认可删除指定 OpenCode 会话并移除本地绑定映射。
 
 ## 8. 常见异常与处理
 
