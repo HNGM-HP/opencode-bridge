@@ -1,6 +1,7 @@
 import { type ParsedCommand, getHelpText } from '../commands/parser.js';
 import { KNOWN_EFFORT_LEVELS, normalizeEffortLevel, type EffortLevel } from '../commands/effort.js';
 import { feishuClient } from '../feishu/client.js';
+import * as path from 'path';
 import {
   opencodeClient,
   type OpencodeAgentConfig,
@@ -12,6 +13,7 @@ import { buildControlCard, buildStatusCard } from '../feishu/cards.js';
 import { modelConfig, userConfig } from '../config.js';
 import { sendFileToFeishu } from './file-sender.js';
 import { lifecycleHandler } from './lifecycle.js';
+import { DirectoryPolicy } from '../utils/directory-policy.js';
 
 const SUPPORTED_ROLE_TOOLS = [
   'bash',
@@ -264,8 +266,8 @@ function parseRoleCreateSpec(spec: string): RoleCreateParseResult {
     mode = parsedMode;
   }
 
-  const toolsResult = buildToolsConfig(toolsRaw);
-  if (!toolsResult.ok) return toolsResult;
+   const toolsResult = buildToolsConfig(toolsRaw);
+  if (!toolsResult.ok) return { ok: false, message: (toolsResult as any).message };
 
   return {
     ok: true,
@@ -743,7 +745,7 @@ export class CommandHandler {
 
         case 'session':
           if (command.sessionAction === 'new') {
-            await this.handleNewSession(chatId, messageId, context.senderId, context.chatType);
+            await this.handleNewSession(chatId, messageId, context.senderId, context.chatType, command.sessionDirectory);
           } else if (command.sessionAction === 'list') {
             await this.handleListSessions(chatId, messageId);
           } else if (command.sessionAction === 'switch' && command.sessionId) {
@@ -753,11 +755,25 @@ export class CommandHandler {
           }
           break;
 
+        case 'project':
+          if (command.projectAction === 'list') {
+            await this.handleProjectList(chatId, messageId);
+          } else if (command.projectAction === 'default_set' && command.projectValue) {
+            await this.handleProjectDefault(chatId, messageId, 'set', command.projectValue);
+          } else if (command.projectAction === 'default_clear') {
+            await this.handleProjectDefault(chatId, messageId, 'clear');
+          } else if (command.projectAction === 'default_show') {
+            await this.handleProjectDefaultShow(chatId, messageId);
+          } else {
+            await feishuClient.reply(messageId, '用法: /project list 或 /project default set <路径或别名>');
+          }
+          break;
+
         case 'clear':
           console.log(`[Command] clear 命令, clearScope=${command.clearScope}`);
           if (command.clearScope === 'free_session') {
             // 清理空闲群聊
-            await this.handleClearFreeSession(chatId, messageId, command.clearSessionId);
+            await this.handleClearFreeSession(chatId, messageId);
           } else {
             // 清空当前对话上下文（默认行为）
             await this.handleNewSession(chatId, messageId, context.senderId, context.chatType); 
@@ -831,8 +847,9 @@ export class CommandHandler {
           break;
       }
     } catch (error) {
-      console.error('[Command] 执行失败:', error);
-      await feishuClient.reply(messageId, `❌ 命令执行出错: ${error}`);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      console.error('[Command] 执行失败详情:', errorMessage);
+      await feishuClient.reply(messageId, '❌ 命令执行出错，请稍后重试');
     }
   }
 
@@ -854,21 +871,128 @@ export class CommandHandler {
     chatId: string,
     messageId: string,
     userId: string,
-    chatType: 'p2p' | 'group'
+    chatType: 'p2p' | 'group',
+    rawDirectory?: string
   ): Promise<void> {
-    // 1. 创建新会话
+    // 1. 通过 DirectoryPolicy 解析目录
+    const chatDefault = chatSessionStore.getSession(chatId)?.defaultDirectory;
+    const normalizedRaw = rawDirectory?.trim() || '';
+    const explicitDirectory = normalizedRaw && path.isAbsolute(normalizedRaw) ? normalizedRaw : undefined;
+    const aliasName = normalizedRaw && !path.isAbsolute(normalizedRaw) ? normalizedRaw : undefined;
+    const dirResult = DirectoryPolicy.resolve({
+      explicitDirectory,
+      aliasName,
+      chatDefaultDirectory: chatDefault,
+    });
+
+    if (!dirResult.ok) {
+      console.warn(`[Command] 目录校验失败: ${(dirResult as any).userMessage}`);
+      await feishuClient.reply(messageId, (dirResult as any).userMessage);
+      return;
+    }
+
+    // 2. 创建会话
     const title = this.buildSessionTitle(chatType, userId);
-    const session = await opencodeClient.createSession(title);
-    
-    if (session) {
-      // 2. 更新绑定
-      chatSessionStore.setSession(chatId, session.id, userId, title, {
-        chatType,
-        sessionDirectory: session.directory,
-      });
-      await feishuClient.reply(messageId, `✅ 已创建新会话窗口\nID: ${session.id}`);
+    const effectiveDir = dirResult.source === 'server_default' ? undefined : dirResult.directory;
+
+    try {
+      const session = await opencodeClient.createSession(title);
+      if (session) {
+        chatSessionStore.setSession(chatId, session.id, userId, title, {
+          chatType,
+          sessionDirectory: session.directory,
+          projectName: dirResult.projectName,
+        });
+        // 用户显式指定路径或别名时，同步更新群默认目录
+        if (session.directory && (dirResult.source === 'explicit' || dirResult.source === 'alias')) {
+          chatSessionStore.updateConfig(chatId, { defaultDirectory: session.directory });
+        }
+        const projectLabel = dirResult.projectName ? `\n📁 项目: ${dirResult.projectName}` : '';
+        const dirInfo = session.directory ? `\n📂 工作目录: ${session.directory}` : '';
+        await feishuClient.reply(messageId, `✅ 已创建新会话窗口\nID: ${session.id}${projectLabel}${dirInfo}`);
+      } else {
+        await feishuClient.reply(messageId, '❌ 创建会话失败');
+      }
+    } catch (error) {
+      console.error('[Command] 创建会话失败:', error);
+      await feishuClient.reply(messageId, '❌ 创建会话失败，请检查目录是否为有效的代码仓库\n使用 /project list 查看可用项目');
+    }
+  }
+
+  private async handleProjectList(chatId: string, messageId: string): Promise<void> {
+    // 从 store 收集所有已知目录，聚合查询各 Instance 的 session
+    const storeKnownDirs = chatSessionStore.getKnownDirectories();
+    let knownDirs: string[] = [...storeKnownDirs];
+    try {
+       // 注意：这里使用 listSessionsAcrossProjects 从已知目录获取会话
+      const sessions = await opencodeClient.listSessionsAcrossProjects();
+      const sessionDirs = sessions
+        .map((session: any) => session.directory)
+        .filter((directory: string): directory is string => Boolean(directory));
+      const uniqueDirs = new Set([...knownDirs, ...sessionDirs]);
+      knownDirs = Array.from(uniqueDirs);
+    } catch (error) {
+      console.warn('[Command] 获取会话列表失败:', error);
+    }
+
+    const projects = DirectoryPolicy.listAvailableProjects(knownDirs);
+
+    if (projects.length === 0) {
+      await feishuClient.reply(messageId, '暂无可用项目\n管理员可通过 PROJECT_ALIASES 环境变量配置项目别名');
+      return;
+    }
+
+    const lines = projects.map((project, index) => {
+      const tag = project.source === 'alias' ? '🏷️' : '📂';
+      return `${index + 1}. ${tag} **${project.name}** — ${project.directory}`;
+    });
+
+    const chatDefault = chatSessionStore.getSession(chatId)?.defaultDirectory;
+    const defaultLine = chatDefault ? `\n当前群默认: ${chatDefault}` : '\n当前群默认: 跟随全局';
+
+    await feishuClient.reply(
+      messageId,
+      `📋 **可用项目列表**\n\n${lines.join('\n')}${defaultLine}\n\n使用 \`/session new <项目名或路径>\` 创建指定项目的会话`
+    );
+  }
+
+  private async handleProjectDefault(
+    chatId: string,
+    messageId: string,
+    action: 'set' | 'clear',
+    value?: string
+  ): Promise<void> {
+    if (action === 'clear') {
+      chatSessionStore.updateConfig(chatId, { defaultDirectory: undefined });
+      await feishuClient.reply(messageId, '✅ 已清除群默认项目，将跟随全局默认');
+      return;
+    }
+
+    if (!value) {
+      await feishuClient.reply(messageId, '用法: /project default set <路径或别名>');
+      return;
+    }
+
+    const normalizedValue = value.trim();
+    const explicitDirectory = normalizedValue && path.isAbsolute(normalizedValue) ? normalizedValue : undefined;
+    const aliasName = normalizedValue && !path.isAbsolute(normalizedValue) ? normalizedValue : undefined;
+    const dirResult = DirectoryPolicy.resolve({ explicitDirectory, aliasName });
+    if (!dirResult.ok) {
+      await feishuClient.reply(messageId, (dirResult as any).userMessage);
+      return;
+    }
+
+    chatSessionStore.updateConfig(chatId, { defaultDirectory: dirResult.directory });
+    const label = dirResult.projectName ? ` (${dirResult.projectName})` : '';
+    await feishuClient.reply(messageId, `✅ 已设置群默认项目: ${dirResult.directory}${label}`);
+  }
+
+  private async handleProjectDefaultShow(chatId: string, messageId: string): Promise<void> {
+    const chatDefault = chatSessionStore.getSession(chatId)?.defaultDirectory;
+    if (chatDefault) {
+      await feishuClient.reply(messageId, `当前群默认项目: ${chatDefault}\n使用 \`/project default clear\` 清除`);
     } else {
-      await feishuClient.reply(messageId, '❌ 创建会话失败');
+      await feishuClient.reply(messageId, '当前群未设置默认项目（跟随全局默认）\n使用 \`/project default set <路径或别名>\` 设置');
     }
   }
 
@@ -911,11 +1035,7 @@ export class CommandHandler {
       normalizedSessionId,
       userId,
       title,
-      {
-        protectSessionDelete: true,
-        chatType,
-        sessionDirectory: targetSession.directory,
-      }
+      { protectSessionDelete: true, chatType, resolvedDirectory: targetSession.directory }
     );
 
     const replyLines = [
@@ -931,7 +1051,7 @@ export class CommandHandler {
   }
 
   private async handleListSessions(chatId: string, messageId: string): Promise<void> {
-    let sessions: Awaited<ReturnType<typeof opencodeClient.listSessions>> = [];
+    let sessions: Awaited<ReturnType<typeof opencodeClient.listSessionsAcrossProjects>> = [];
     let opencodeUnavailable = false;
     try {
       sessions = await opencodeClient.listSessionsAcrossProjects();
@@ -940,7 +1060,7 @@ export class CommandHandler {
       console.warn('[Command] 拉取 OpenCode 会话失败，回退到本地映射列表:', error);
     }
 
-    const localBindings = new Map<string, { chatIds: string[]; title?: string; sessionDirectory?: string }>();
+    const localBindings = new Map<string, { chatIds: string[]; title?: string; sessionDirectory?: string; projectName?: string }>();
     for (const boundChatId of chatSessionStore.getAllChatIds()) {
       const binding = chatSessionStore.getSession(boundChatId);
       if (!binding?.sessionId) continue;
@@ -954,6 +1074,9 @@ export class CommandHandler {
         if (!existing.sessionDirectory && binding.sessionDirectory) {
           existing.sessionDirectory = binding.sessionDirectory;
         }
+        if (!existing.projectName && binding.projectName) {
+          existing.projectName = binding.projectName;
+        }
         continue;
       }
 
@@ -961,11 +1084,13 @@ export class CommandHandler {
         chatIds: [boundChatId],
         title: binding.title,
         ...(binding.sessionDirectory ? { sessionDirectory: binding.sessionDirectory } : {}),
+        ...(binding.projectName ? { projectName: binding.projectName } : {}),
       });
     }
 
     interface SessionListRow {
       directory: string;
+      projectName?: string;
       title: string;
       sessionId: string;
       chatDetail: string;
@@ -978,10 +1103,12 @@ export class CommandHandler {
       const bindingInfo = localBindings.get(session.id);
       const title = session.title && session.title.trim().length > 0 ? session.title.trim() : '未命名会话';
       const directory = session.directory && session.directory.trim().length > 0 ? session.directory.trim() : '-';
+      const projectName = bindingInfo?.projectName;
       const chatDetail = bindingInfo ? bindingInfo.chatIds.join(', ') : '无';
       const status = bindingInfo ? 'OpenCode可用/已绑定' : 'OpenCode可用/未绑定';
       rows.push({
         directory,
+        projectName,
         title,
         sessionId: session.id,
         chatDetail,
@@ -991,7 +1118,7 @@ export class CommandHandler {
       localBindings.delete(session.id);
     }
 
-    for (const [sessionId, bindingInfo] of localBindings.entries()) {
+    for (const [sessionId, bindingInfo] of Array.from(localBindings.entries())) {
       const localTitle = bindingInfo.title && bindingInfo.title.trim().length > 0
         ? bindingInfo.title.trim()
         : '本地绑定记录';
@@ -1000,6 +1127,7 @@ export class CommandHandler {
         : '-';
       rows.push({
         directory: localDirectory,
+        projectName: bindingInfo.projectName,
         title: localTitle,
         sessionId,
         chatDetail: bindingInfo.chatIds.join(', '),
@@ -1040,7 +1168,10 @@ export class CommandHandler {
     const tableHeader = '工作区目录 | SessionID | OpenCode侧会话名称 | 绑定群明细 | 当前会话状态';
     const rowTexts: string[] = [];
     for (const row of rows) {
-      rowTexts.push(`${row.directory} | ${row.sessionId} | ${row.title} | ${row.chatDetail} | ${row.status}`);
+      const directoryDisplay = row.projectName
+        ? `${row.directory} (${row.projectName})`
+        : row.directory;
+      rowTexts.push(`${directoryDisplay} | ${row.sessionId} | ${row.title} | ${row.chatDetail} | ${row.status}`);
     }
 
     if (rowTexts.length === 0) {
@@ -1060,6 +1191,7 @@ export class CommandHandler {
       }
       currentRows += `${row}\n`;
     }
+
     if (currentRows.trim().length > 0) {
       rowChunks.push(currentRows.trimEnd());
     }
@@ -1099,18 +1231,19 @@ export class CommandHandler {
       if (!session) {
          // 自动创建会话
          const title = `群聊会话-${chatId.slice(-4)}`;
-          const newSession = await opencodeClient.createSession(title);
+         const chatDefault = chatSessionStore.getSession(chatId)?.defaultDirectory;
+         const dirResult = DirectoryPolicy.resolve({ chatDefaultDirectory: chatDefault });
+         const effectiveDir = dirResult.ok && dirResult.source !== 'server_default' ? dirResult.directory : undefined;
+         const newSession = await opencodeClient.createSession(title);
           if (newSession) {
-              chatSessionStore.setSession(chatId, newSession.id, userId, title, {
-                chatType,
-                sessionDirectory: newSession.directory,
-              });
-              session = chatSessionStore.getSession(chatId);
-          } else {
-             await feishuClient.reply(messageId, '❌ 无法创建会话以保存配置');
-             return;
-         }
+               chatSessionStore.setSession(chatId, newSession.id, userId, title, { chatType, resolvedDirectory: newSession.directory });
+               session = chatSessionStore.getSession(chatId);
+           } else {
+              await feishuClient.reply(messageId, '❌ 无法创建会话以保存配置');
+              return;
+          }
       }
+
 
       // 1. 如果没有提供模型名称，显示当前状态
       if (!modelName) {
@@ -1200,12 +1333,12 @@ export class CommandHandler {
       let session = chatSessionStore.getSession(chatId);
       if (!session) {
         const title = `群聊会话-${chatId.slice(-4)}`;
-        const newSession = await opencodeClient.createSession(title);
+        const chatDefault = chatSessionStore.getSession(chatId)?.defaultDirectory;
+        const dirResult = DirectoryPolicy.resolve({ chatDefaultDirectory: chatDefault });
+        const effectiveDir = dirResult.ok && dirResult.source !== 'server_default' ? dirResult.directory : undefined;
+        const newSession = await opencodeClient.createSession(title, effectiveDir);
         if (newSession) {
-          chatSessionStore.setSession(chatId, newSession.id, userId, title, {
-            chatType,
-            sessionDirectory: newSession.directory,
-          });
+          chatSessionStore.setSession(chatId, newSession.id, userId, title, { chatType, resolvedDirectory: newSession.directory });
           session = chatSessionStore.getSession(chatId);
         } else {
           await feishuClient.reply(messageId, '❌ 无法创建会话以保存强度配置');
@@ -1408,22 +1541,22 @@ export class CommandHandler {
   ): Promise<void> {
     const parsed = parseRoleCreateSpec(roleSpec);
     if (!parsed.ok) {
-      await feishuClient.reply(messageId, `❌ 创建角色失败\n${parsed.message}`);
+      await feishuClient.reply(messageId, `❌ 创建角色失败\n${(parsed as any).message}`);
       return;
     }
 
     let session = chatSessionStore.getSession(chatId);
     if (!session) {
       const title = `群聊会话-${chatId.slice(-4)}`;
-      const newSession = await opencodeClient.createSession(title);
+      const chatDefault = chatSessionStore.getSession(chatId)?.defaultDirectory;
+      const dirResult = DirectoryPolicy.resolve({ chatDefaultDirectory: chatDefault });
+      const effectiveDir = dirResult.ok && dirResult.source !== 'server_default' ? dirResult.directory : undefined;
+      const newSession = await opencodeClient.createSession(title, effectiveDir);
       if (!newSession) {
         await feishuClient.reply(messageId, '❌ 无法创建会话以保存角色设置');
         return;
       }
-      chatSessionStore.setSession(chatId, newSession.id, userId, title, {
-        chatType,
-        sessionDirectory: newSession.directory,
-      });
+      chatSessionStore.setSession(chatId, newSession.id, userId, title, { chatType, resolvedDirectory: newSession.directory });
       session = chatSessionStore.getSession(chatId);
     }
 
@@ -1486,12 +1619,12 @@ export class CommandHandler {
       if (!session) {
         // 自动创建会话
         const title = `群聊会话-${chatId.slice(-4)}`;
-        const newSession = await opencodeClient.createSession(title);
+        const chatDefault = chatSessionStore.getSession(chatId)?.defaultDirectory;
+        const dirResult = DirectoryPolicy.resolve({ chatDefaultDirectory: chatDefault });
+        const effectiveDir = dirResult.ok && dirResult.source !== 'server_default' ? dirResult.directory : undefined;
+        const newSession = await opencodeClient.createSession(title, effectiveDir);
         if (newSession) {
-          chatSessionStore.setSession(chatId, newSession.id, userId, title, {
-            chatType,
-            sessionDirectory: newSession.directory,
-          });
+          chatSessionStore.setSession(chatId, newSession.id, userId, title, { chatType, resolvedDirectory: newSession.directory });
           session = chatSessionStore.getSession(chatId);
         } else {
           await feishuClient.reply(messageId, '❌ 无法创建会话以保存配置');
@@ -1647,7 +1780,9 @@ export class CommandHandler {
         }
 
         const shellAgent = await this.resolveShellAgent(chatId);
-        const result = await opencodeClient.sendShellCommand(sessionId, shellCommand, shellAgent);
+        const shellSessionData = chatSessionStore.getSession(chatId);
+        const shellDirectory = shellSessionData?.sessionDirectory;
+        const result = await opencodeClient.sendShellCommand(sessionId, shellCommand, shellAgent, shellDirectory ? { directory: shellDirectory } : undefined);
         const output = this.formatOutput(result.parts);
         if (output !== '(无输出)') {
           await feishuClient.reply(messageId, output);
@@ -1658,8 +1793,10 @@ export class CommandHandler {
         return;
       }
 
-      // 使用专门的 sendCommand 方法
-      const result = await opencodeClient.sendCommand(sessionId, commandName, commandArgs);
+      // 使用专门的 sendCommand 方法（传递工作目录以切换 Instance 上下文）
+      const cmdSessionData = chatSessionStore.getSession(chatId);
+      const cmdDirectory = cmdSessionData?.sessionDirectory;
+      const result = await opencodeClient.sendCommand(sessionId, commandName, commandArgs, cmdDirectory ? { directory: cmdDirectory } : undefined);
 
       // 处理返回结果
       if (result && result.parts) {
@@ -1730,57 +1867,7 @@ export class CommandHandler {
     return `${merged.slice(0, maxLength)}\n\n...（输出过长，已截断）`;
   }
 
-  private async handleClearFreeSession(chatId: string, messageId: string, targetSessionId?: string): Promise<void> {
-    const normalizedTargetSessionId = typeof targetSessionId === 'string' ? targetSessionId.trim() : '';
-    if (normalizedTargetSessionId) {
-      await feishuClient.reply(messageId, `🧹 正在删除指定会话: ${normalizedTargetSessionId} ...`);
-
-      const targetSession = await opencodeClient.findSessionAcrossProjects(normalizedTargetSessionId);
-      if (!targetSession) {
-        await feishuClient.reply(messageId, `❌ 未找到会话: ${normalizedTargetSessionId}`);
-        return;
-      }
-
-      const boundChatIds: string[] = [];
-      let protectedBindingCount = 0;
-      for (const boundChatId of chatSessionStore.getAllChatIds()) {
-        const binding = chatSessionStore.getSession(boundChatId);
-        if (binding?.sessionId !== normalizedTargetSessionId) {
-          continue;
-        }
-
-        boundChatIds.push(boundChatId);
-        if (chatSessionStore.isSessionDeleteProtected(boundChatId)) {
-          protectedBindingCount += 1;
-        }
-      }
-
-      const deleted = await opencodeClient.deleteSession(normalizedTargetSessionId, {
-        directory: targetSession.directory,
-      });
-      if (!deleted) {
-        await feishuClient.reply(messageId, `❌ 删除会话失败: ${normalizedTargetSessionId}`);
-        return;
-      }
-
-      for (const boundChatId of boundChatIds) {
-        chatSessionStore.removeSession(boundChatId);
-      }
-
-      const lines = [
-        '✅ 指定会话已删除',
-        `- 工作区目录: ${targetSession.directory || '-'}`,
-        `- 会话ID: ${normalizedTargetSessionId}`,
-        `- 清理本地映射: ${boundChatIds.length} 个群`,
-      ];
-      if (protectedBindingCount > 0) {
-        lines.push(`- 删除保护映射: ${protectedBindingCount} 个（手动删除已强制执行）`);
-      }
-
-      await feishuClient.reply(messageId, lines.join('\n'));
-      return;
-    }
-
+  private async handleClearFreeSession(chatId: string, messageId: string): Promise<void> {
     await feishuClient.reply(messageId, '🧹 正在扫描并清理无效群聊...');
     const stats = await lifecycleHandler.runCleanupScan();
 

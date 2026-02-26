@@ -472,6 +472,8 @@ export interface CreateChatCardData {
   sessionOptions: CreateChatSessionOption[];
   totalSessionCount?: number;
   manualBindEnabled: boolean;
+  projectOptions?: Array<{ name: string; directory: string; source: 'alias' | 'history' }>;
+  allowCustomPath?: boolean;
 }
 
 function resolveCreateChatCardState(data: CreateChatCardData): {
@@ -513,48 +515,90 @@ function buildCreateChatSelectorElements(data: CreateChatCardData): object[] {
     noteLines.push(`已展示最近 ${state.shownExistingCount} 个会话（总计 ${state.totalSessionCount} 个）。`);
   }
 
-  return [
-    {
+  const elements: object[] = [];
+
+  elements.push({
+    tag: 'action',
+    actions: [
+      {
+        tag: 'select_static',
+        placeholder: { tag: 'plain_text', content: '选择会话来源' },
+        value: { action: 'create_chat_select' },
+        options: state.options.map(option => ({
+          text: { tag: 'plain_text', content: option.label },
+          value: option.value,
+        })),
+      },
+    ],
+  });
+
+  if (data.projectOptions && data.projectOptions.length > 0) {
+    const projectOpts = [
+      { text: { tag: 'plain_text', content: '跟随默认项目' }, value: '__default__' },
+      ...data.projectOptions.map(project => ({
+        text: {
+          tag: 'plain_text',
+          content: `${project.name}（${project.directory.length > 40 ? '...' + project.directory.slice(-37) : project.directory}）`,
+        },
+        value: project.directory,
+      })),
+    ];
+    elements.push({
       tag: 'action',
       actions: [
         {
           tag: 'select_static',
-          placeholder: { tag: 'plain_text', content: '选择会话来源' },
-          value: { action: 'create_chat_select' },
-          options: state.options.map(option => ({
-            text: { tag: 'plain_text', content: option.label },
-            value: option.value,
-          })),
+          placeholder: { tag: 'plain_text', content: '选择工作项目（可选）' },
+          value: { action: 'create_chat_project_select' },
+          options: projectOpts,
         },
       ],
+    });
+  }
+
+  // 使用 form 容器包裹路径输入和提交按钮，确保 input 值能通过 form_value 传递
+  const formElements: object[] = [];
+
+  if (data.allowCustomPath) {
+    formElements.push({
+      tag: 'input',
+      name: 'custom_directory',
+      placeholder: { tag: 'plain_text', content: '手动输入工作目录绝对路径（可选）' },
+      label: { tag: 'plain_text', content: '自定义工作目录:' },
+      label_position: 'top' as const,
+    });
+  }
+
+  formElements.push({
+    tag: 'button',
+    text: { tag: 'plain_text', content: '➕ 创建群聊' },
+    type: 'primary',
+    action_type: 'form_submit',
+    name: 'create_chat_submit',
+    value: {
+      action: 'create_chat_submit',
+      selectedSessionId: state.selected.value,
     },
-    {
-      tag: 'action',
-      actions: [
-        {
-          tag: 'button',
-          text: {
-            tag: 'plain_text',
-            content: '➕ 创建群聊',
-          },
-          type: 'primary',
-          value: {
-            action: 'create_chat_submit',
-            selectedSessionId: state.selected.value,
-          },
-        },
-      ],
-    },
-    {
-      tag: 'note',
-      elements: [
-        {
-          tag: 'plain_text',
-          content: noteLines.join('\n'),
-        },
-      ],
-    },
-  ];
+  });
+
+  elements.push({
+    tag: 'form',
+    name: 'create_chat_form',
+    elements: formElements,
+  });
+
+  noteLines.push('工作项目决定 AI 在哪份代码上工作。未选择时使用默认项目。');
+  elements.push({
+    tag: 'note',
+    elements: [
+      {
+        tag: 'plain_text',
+        content: noteLines.join('\n'),
+      },
+    ],
+  });
+
+  return elements;
 }
 
 export function buildCreateChatCard(data: CreateChatCardData): object {
