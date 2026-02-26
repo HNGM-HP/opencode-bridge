@@ -18,7 +18,8 @@ export type CommandType =
   | 'help'         // 显示帮助
   | 'status'       // 查看状态
   | 'command'      // 透传命令
-  | 'permission';  // 权限响应
+  | 'permission'   // 权限响应
+  | 'send';        // 发送文件到飞书
 
 // 解析后的命令
 export interface ParsedCommand {
@@ -289,6 +290,11 @@ export function parseCommand(text: string): ParsedCommand {
       case 'session.compact':
         return { type: 'compact' };
 
+      case 'send':
+      case 'send-file':
+      case 'sendfile':
+        return { type: 'send', text: args.join(' ') };
+
       default:
         // 未知命令透传到OpenCode
         return {
@@ -351,5 +357,8 @@ export function getHelpText(): string {
 • 强度优先级：\`#临时覆盖\` > \`/effort 会话默认\` > OpenCode 默认。
 • 其他未知 \`/xxx\` 命令会自动透传给 OpenCode（会话已绑定时生效）。
 • 支持透传白名单 shell 命令：\`!cd\`、\`!ls\`、\`!mkdir\`、\`!rm\`、\`!cp\`、\`!mv\`、\`!git\` 等；\`!vi\` / \`!vim\` / \`!nano\` 不会透传。
-• 如果遇到问题，试着使用 \`/panel\` 面板操作更方便。`;
+• 如果遇到问题，试着使用 \`/panel\` 面板操作更方便。
+
+ 📤 **文件发送**
+ • \`/send <绝对路径>\` 发送文件到群聊 (e.g. \`/send /tmp/report.pdf\` 或 \`/send C:\\Users\\你\\Desktop\\图片.jpg\`)`;
 }
