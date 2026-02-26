@@ -370,10 +370,29 @@ export class DirectoryPolicy {
   }
 
   private static isDangerousPath(value: string): boolean {
+    // Windows UNC 设备路径
     if (value.startsWith('\\\\?\\') || value.startsWith('\\\\.\\')) {
       return true;
     }
-    return value.startsWith('\\\\');
+    if (value.startsWith('\\\\')) {
+      return true;
+    }
+
+    // Linux 系统敏感路径（仅在非 Windows 平台拦截）
+    if (!isWindows) {
+      const normalized = value.toLowerCase();
+      const dangerousPrefixes = [
+        '/etc', '/proc', '/dev', '/sys', '/boot',
+        '/bin', '/sbin', '/usr/bin', '/usr/sbin',
+      ];
+      for (const prefix of dangerousPrefixes) {
+        if (normalized === prefix || normalized.startsWith(prefix + '/')) {
+          return true;
+        }
+      }
+    }
+
+    return false;
   }
 
   private static isPathAllowed(target: string, allowedDirectories: string[]): boolean {

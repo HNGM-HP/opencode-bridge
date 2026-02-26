@@ -266,8 +266,8 @@ function parseRoleCreateSpec(spec: string): RoleCreateParseResult {
     mode = parsedMode;
   }
 
-   const toolsResult = buildToolsConfig(toolsRaw);
-  if (!toolsResult.ok) return { ok: false, message: (toolsResult as any).message };
+  const toolsResult = buildToolsConfig(toolsRaw);
+  if (!toolsResult.ok) return { ok: false, message: toolsResult.message };
 
   return {
     ok: true,
@@ -770,8 +770,8 @@ export class CommandHandler {
         case 'clear':
           console.log(`[Command] clear 命令, clearScope=${command.clearScope}`);
           if (command.clearScope === 'free_session') {
-            // 清理空闲群聊
-            await this.handleClearFreeSession(chatId, messageId);
+            // 清理空闲群聊（可选：指定 sessionId 删除特定会话）
+            await this.handleClearFreeSession(chatId, messageId, command.clearSessionId);
           } else {
             // 清空当前对话上下文（默认行为）
             await this.handleNewSession(chatId, messageId, context.senderId, context.chatType); 
@@ -884,8 +884,8 @@ export class CommandHandler {
     });
 
     if (!dirResult.ok) {
-      console.warn(`[Command] 目录校验失败: ${(dirResult as any).userMessage}`);
-      await feishuClient.reply(messageId, (dirResult as any).userMessage);
+      console.warn(`[Command] 目录校验失败: ${dirResult.userMessage}`);
+      await feishuClient.reply(messageId, dirResult.userMessage);
       return;
     }
 
@@ -894,11 +894,11 @@ export class CommandHandler {
     const effectiveDir = dirResult.source === 'server_default' ? undefined : dirResult.directory;
 
     try {
-      const session = await opencodeClient.createSession(title);
+      const session = await opencodeClient.createSession(title, effectiveDir);
       if (session) {
         chatSessionStore.setSession(chatId, session.id, userId, title, {
           chatType,
-          sessionDirectory: session.directory,
+          resolvedDirectory: session.directory,
           projectName: dirResult.projectName,
         });
         // 用户显式指定路径或别名时，同步更新群默认目录
@@ -976,7 +976,7 @@ export class CommandHandler {
     const aliasName = normalizedValue && !path.isAbsolute(normalizedValue) ? normalizedValue : undefined;
     const dirResult = DirectoryPolicy.resolve({ explicitDirectory, aliasName });
     if (!dirResult.ok) {
-      await feishuClient.reply(messageId, (dirResult as any).userMessage);
+      await feishuClient.reply(messageId, dirResult.userMessage);
       return;
     }
 
@@ -1522,7 +1522,7 @@ export class CommandHandler {
   ): Promise<void> {
     const parsed = parseRoleCreateSpec(roleSpec);
     if (!parsed.ok) {
-      await feishuClient.reply(messageId, `❌ 创建角色失败\n${(parsed as any).message}`);
+      await feishuClient.reply(messageId, `❌ 创建角色失败\n${parsed.message}`);
       return;
     }
 
@@ -1848,7 +1848,58 @@ export class CommandHandler {
     return `${merged.slice(0, maxLength)}\n\n...（输出过长，已截断）`;
   }
 
-  private async handleClearFreeSession(chatId: string, messageId: string): Promise<void> {
+  private async handleClearFreeSession(chatId: string, messageId: string, targetSessionId?: string): Promise<void> {
+    const normalizedTargetSessionId = typeof targetSessionId === 'string' ? targetSessionId.trim() : '';
+
+    if (normalizedTargetSessionId) {
+      // 删除指定会话
+      await feishuClient.reply(messageId, `🧹 正在删除指定会话: ${normalizedTargetSessionId} ...`);
+
+      const targetSession = await opencodeClient.findSessionAcrossProjects(normalizedTargetSessionId);
+      if (!targetSession) {
+        await feishuClient.reply(messageId, `❌ 未找到会话: ${normalizedTargetSessionId}`);
+        return;
+      }
+
+      const boundChatIds: string[] = [];
+      let protectedBindingCount = 0;
+      for (const boundChatId of chatSessionStore.getAllChatIds()) {
+        const binding = chatSessionStore.getSession(boundChatId);
+        if (binding?.sessionId !== normalizedTargetSessionId) {
+          continue;
+        }
+        boundChatIds.push(boundChatId);
+        if (chatSessionStore.isSessionDeleteProtected(boundChatId)) {
+          protectedBindingCount += 1;
+        }
+      }
+
+      const deleted = await opencodeClient.deleteSession(normalizedTargetSessionId, {
+        directory: targetSession.directory,
+      });
+      if (!deleted) {
+        await feishuClient.reply(messageId, `❌ 删除会话失败: ${normalizedTargetSessionId}`);
+        return;
+      }
+
+      for (const boundChatId of boundChatIds) {
+        chatSessionStore.removeSession(boundChatId);
+      }
+
+      const lines = [
+        '✅ 指定会话已删除',
+        `- 工作区目录: ${targetSession.directory || '-'}`,
+        `- 会话ID: ${normalizedTargetSessionId}`,
+        `- 清理本地映射: ${boundChatIds.length} 个群`,
+      ];
+      if (protectedBindingCount > 0) {
+        lines.push(`- 删除保护映射: ${protectedBindingCount} 个（手动删除已强制执行）`);
+      }
+      await feishuClient.reply(messageId, lines.join('\n'));
+      return;
+    }
+
+    // 无 targetSessionId：扫描并清理所有空闲群聊
     await feishuClient.reply(messageId, '🧹 正在扫描并清理无效群聊...');
     const stats = await lifecycleHandler.runCleanupScan();
 

@@ -322,6 +322,8 @@ class OpencodeClientWrapper extends EventEmitter {
   private eventListeningEnabled = false;
   private eventStreamActive = false;
   private directoryEventStreams: Map<string, DirectoryEventStreamEntry> = new Map();
+  // 防止并发调用 ensureDirectoryEventStream 对同一目录建立多条 SSE 连接
+  private pendingDirectoryStreams: Map<string, Promise<void>> = new Map();
 
   constructor() {
     super();
@@ -438,6 +440,23 @@ class OpencodeClientWrapper extends EventEmitter {
       return;
     }
 
+    // 防竞态：同一目录正在建立连接时，等待而非重复创建
+    const pending = this.pendingDirectoryStreams.get(normalizedDirectory);
+    if (pending) {
+      await pending;
+      return;
+    }
+
+    const promise = this._createDirectoryEventStream(normalizedDirectory);
+    this.pendingDirectoryStreams.set(normalizedDirectory, promise);
+    try {
+      await promise;
+    } finally {
+      this.pendingDirectoryStreams.delete(normalizedDirectory);
+    }
+  }
+
+  private async _createDirectoryEventStream(normalizedDirectory: string): Promise<void> {
     const existing = this.directoryEventStreams.get(normalizedDirectory);
     if (existing?.active) {
       return;
@@ -456,8 +475,8 @@ class OpencodeClientWrapper extends EventEmitter {
     });
 
     try {
-      const events = await this.client.event.subscribe({
-        query: { directory: normalizedDirectory },
+      const events = await this.client!.event.subscribe({
+        query: { directory: encodeURIComponent(normalizedDirectory) },
       });
       console.log(`[OpenCode] 目录事件流订阅成功: ${normalizedDirectory}`);
 
@@ -495,6 +514,8 @@ class OpencodeClientWrapper extends EventEmitter {
       })();
     } catch (error) {
       console.error(`[OpenCode] 目录事件流订阅失败: ${normalizedDirectory}`, error);
+      // 先清理可能存在的重连定时器，再删除条目，防止僵尸 timer 继续触发
+      this.clearDirectoryEventReconnectTimer(normalizedDirectory);
       this.directoryEventStreams.delete(normalizedDirectory);
     }
   }
@@ -720,7 +741,7 @@ class OpencodeClientWrapper extends EventEmitter {
         ...(model ? { model } : {}),
         ...(options?.variant ? { variant: options.variant } : {}),
       },
-      ...(options?.directory ? { query: { directory: options.directory } } : {}),
+      ...(options?.directory ? { query: { directory: encodeURIComponent(options.directory) } } : {}),
     });
 
     return response.data as { info: Message; parts: Part[] };
@@ -755,7 +776,7 @@ class OpencodeClientWrapper extends EventEmitter {
         ...(model ? { model } : {}),
         ...(options?.variant ? { variant: options.variant } : {}),
       },
-      ...(options?.directory ? { query: { directory: options.directory } } : {}),
+      ...(options?.directory ? { query: { directory: encodeURIComponent(options.directory) } } : {}),
     });
 
     return response.data as { info: Message; parts: Part[] };
@@ -858,7 +879,7 @@ class OpencodeClientWrapper extends EventEmitter {
         command,
         arguments: args,
       },
-      ...(options?.directory ? { query: { directory: options.directory } } : {}),
+      ...(options?.directory ? { query: { directory: encodeURIComponent(options.directory) } } : {}),
     });
 
     if (result.error) {
@@ -1027,7 +1048,7 @@ class OpencodeClientWrapper extends EventEmitter {
     const client = this.getClient();
     const directory = this.normalizeDirectory(options?.directory);
     const result = await client.project.list(
-      directory ? { query: { directory } } : undefined
+      directory ? { query: { directory: encodeURIComponent(directory) } } : undefined
     );
     return Array.isArray(result.data) ? result.data : [];
   }
@@ -1037,7 +1058,7 @@ class OpencodeClientWrapper extends EventEmitter {
     const client = this.getClient();
     const directory = this.normalizeDirectory(options?.directory);
     const result = await client.session.list(
-      directory ? { query: { directory } } : undefined
+      directory ? { query: { directory: encodeURIComponent(directory) } } : undefined
     );
     return Array.isArray(result.data) ? result.data : [];
   }
@@ -1138,7 +1159,7 @@ class OpencodeClientWrapper extends EventEmitter {
     const directory = this.normalizeDirectory(options?.directory);
     const result = await client.session.get({
       path: { id: normalizedSessionId },
-      ...(directory ? { query: { directory } } : {}),
+      ...(directory ? { query: { directory: encodeURIComponent(directory) } } : {}),
     });
 
     if (result.error) {
@@ -1200,7 +1221,7 @@ class OpencodeClientWrapper extends EventEmitter {
     }
     const result = await client.session.create({
       body: { title: title || '新对话' },
-      ...(normalizedDir ? { query: { directory: normalizedDir } } : {}),
+      ...(normalizedDir ? { query: { directory: encodeURIComponent(normalizedDir) } } : {}),
     });
     return result.data!;
   }
@@ -1212,7 +1233,7 @@ class OpencodeClientWrapper extends EventEmitter {
       const directory = this.normalizeDirectory(options?.directory);
       await client.session.delete({
         path: { id: sessionId },
-        ...(directory ? { query: { directory } } : {}),
+        ...(directory ? { query: { directory: encodeURIComponent(directory) } } : {}),
       });
       console.log(`[OpenCode] 已删除会话: ${sessionId}`);
       return true;
