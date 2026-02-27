@@ -9,6 +9,7 @@ import type { EffortLevel } from '../commands/effort.js';
 import { commandHandler } from './command.js';
 import { modelConfig, attachmentConfig } from '../config.js';
 import { DirectoryPolicy } from '../utils/directory-policy.js';
+import { buildSessionTimestamp } from '../utils/session-title.js';
 
 import { randomUUID } from 'crypto';
 import path from 'path';
@@ -143,7 +144,7 @@ export class GroupHandler {
     let sessionId = chatSessionStore.getSessionId(chatId);
     if (!sessionId) {
       // 如果没有绑定会话，自动创建一个（走 DirectoryPolicy）
-      const title = `群聊会话-${chatId.slice(-4)}`;
+      const title = `群聊-${buildSessionTimestamp()}`;
       const chatDefault = chatSessionStore.getSession(chatId)?.defaultDirectory;
       const dirResult = DirectoryPolicy.resolve({ chatDefaultDirectory: chatDefault });
       const effectiveDir = dirResult.ok && dirResult.source !== 'server_default' ? dirResult.directory : undefined;

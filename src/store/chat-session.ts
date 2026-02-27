@@ -88,8 +88,8 @@ class ChatSessionStore {
 
   private inferChatTypeFromTitle(title?: string): ChatSessionType | undefined {
     if (!title) return undefined;
-    if (title.startsWith('飞书私聊')) return 'p2p';
-    if (title.startsWith('飞书群聊') || title.startsWith('群聊')) return 'group';
+    if (title.startsWith('飞书私聊') || title.startsWith('私聊-')) return 'p2p';
+    if (title.startsWith('飞书群聊') || title.startsWith('群聊-') || title.startsWith('群聊会话')) return 'group';
     return undefined;
   }
 
@@ -241,7 +241,7 @@ class ChatSessionStore {
       return true;
     }
 
-    return typeof session.title === 'string' && session.title.startsWith('飞书私聊');
+    return typeof session.title === 'string' && (session.title.startsWith('飞书私聊') || session.title.startsWith('私聊-'));
   }
 
   isGroupChatSession(chatId: string): boolean {
@@ -262,7 +262,7 @@ class ChatSessionStore {
       return false;
     }
 
-    return session.title.startsWith('飞书群聊') || session.title.startsWith('群聊');
+    return session.title.startsWith('飞书群聊') || session.title.startsWith('群聊-') || session.title.startsWith('群聊会话');
   }
 
   // 更新会话配置 (模型/角色/强度/默认目录)
@@ -308,6 +308,15 @@ class ChatSessionStore {
           delete session.defaultDirectory;
         }
       }
+      this.save();
+    }
+  }
+
+  // 更新会话标题（/rename 命令后同步本地缓存）
+  updateTitle(chatId: string, title: string): void {
+    const session = this.data.get(chatId);
+    if (session) {
+      session.title = title;
       this.save();
     }
   }

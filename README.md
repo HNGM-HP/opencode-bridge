@@ -429,6 +429,8 @@ node scripts/deploy.mjs status
 | `/sessions all` | 列出所有项目的全部会话 |
 | `/session new` | 开启新话题（重置上下文，使用默认项目） |
 | `/session new <项目别名或绝对路径>` | 在指定项目/目录中新建会话 |
+| `/session new --name <名称>` | 创建会话时直接命名（如 `/session new --name 技术架构评审`） |
+| `/rename <新名称>` | 随时重命名当前会话（如 `/rename Q3后端API设计讨论`） |
 | `/project list` | 列出可用项目（别名 + 历史目录） |
 | `/project default` | 查看当前群默认项目 |
 | `/project default set <路径或别名>` | 设置当前群的默认工作项目 |

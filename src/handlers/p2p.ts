@@ -9,6 +9,7 @@ import {
   type CreateChatSessionOption,
 } from '../feishu/cards.js';
 import { DirectoryPolicy } from '../utils/directory-policy.js';
+import { buildSessionTimestamp } from '../utils/session-title.js';
 import { parseCommand, getHelpText, type ParsedCommand } from '../commands/parser.js';
 import { commandHandler } from './command.js';
 import { groupHandler } from './group.js';
@@ -322,9 +323,8 @@ private getSessionOptionLabel(session: OpencodeSession, highlightWorkspace: bool
     return normalized.slice(0, 4);
   }
 
-  private getPrivateSessionTitle(openId: string): string {
-    const shortOpenId = this.getPrivateSessionShortId(openId);
-    return `飞书私聊${shortOpenId || '用户'}`;
+  private getPrivateSessionTitle(_openId: string): string {
+    return `私聊-${buildSessionTimestamp()}`;
   }
 
   private isCreateGroupCommand(text: string): boolean {
