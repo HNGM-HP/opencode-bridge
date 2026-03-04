@@ -30,7 +30,7 @@ const defaultOpencodeHost = 'localhost';
 const defaultOpencodePort = 4096;
 const fixedOpencodeServerConfig = {
   port: 4096,
-  hostname: '0.0.0.0',
+  hostname: '127.0.0.1', // 安全默认值：仅监听本地回环地址
   cors: ['*'],
 };
 let cachedDotEnv = null;
@@ -704,6 +704,8 @@ function writeFixedOpencodeServerConfig() {
   fs.mkdirSync(configDir, { recursive: true });
 
   let existingConfig = {};
+  let hasExistingServerConfig = false;
+  
   if (fs.existsSync(configPath)) {
     try {
       const rawContent = fs.readFileSync(configPath, 'utf-8').trim();
@@ -711,6 +713,7 @@ function writeFixedOpencodeServerConfig() {
         const parsed = JSON.parse(rawContent);
         if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
           existingConfig = parsed;
+          hasExistingServerConfig = Boolean(parsed.server && typeof parsed.server === 'object');
         } else {
           console.warn('[deploy] 当前 opencode.json 不是对象结构，将保留为空配置后写入 server 字段');
         }
@@ -722,15 +725,41 @@ function writeFixedOpencodeServerConfig() {
     }
   }
 
+  // 如果已有 server 配置，提示用户而不是覆盖
+  if (hasExistingServerConfig) {
+    console.log('[deploy] 检测到 opencode.json 已有 server 配置，保留用户设置');
+    console.log('[deploy] 如需使用默认安全配置，请手动删除 server 字段后重新执行');
+    console.log('[deploy] 当前配置:', JSON.stringify(existingConfig.server, null, 2));
+    return configPath;
+  }
+
+  // 支持环境变量覆盖默认配置
+  const customHostname = process.env.OPENCODE_SERVER_HOSTNAME;
+  const customPort = process.env.OPENCODE_SERVER_PORT;
+  
+  const serverConfig = {
+    ...fixedOpencodeServerConfig,
+    ...(customHostname ? { hostname: customHostname } : {}),
+    ...(customPort ? { port: parseInt(customPort, 10) } : {}),
+  };
+
   const nextConfig = {
     ...existingConfig,
-    server: {
-      ...fixedOpencodeServerConfig,
-    },
+    server: serverConfig,
   };
 
   fs.writeFileSync(configPath, `${JSON.stringify(nextConfig, null, 2)}\n`, 'utf-8');
   console.log(`[deploy] 已写入 OpenCode server 配置: ${configPath}`);
+  console.log('[deploy] 服务器配置:', JSON.stringify(serverConfig, null, 2));
+  
+  // 安全警告
+  if (serverConfig.hostname === '0.0.0.0') {
+    console.warn('\n[deploy] ⚠️  安全警告: hostname 设置为 0.0.0.0，将监听所有网络接口');
+    console.warn('[deploy] ⚠️  这可能允许外部网络访问 OpenCode API');
+    console.warn('[deploy] ⚠️  建议配置 OPENCODE_SERVER_PASSWORD 环境变量进行鉴权');
+    console.warn('[deploy] ⚠️  或设置 hostname 为 127.0.0.1 仅监听本地\n');
+  }
+  
   return configPath;
 }
 
