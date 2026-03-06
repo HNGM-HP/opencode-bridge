@@ -296,6 +296,39 @@ class DiscordHandler {
     return `discord:${event.conversationId}`;
   }
 
+  private resolvePermissionDirectoryOptions(
+    sessionId: string,
+    conversationId: string
+  ): { directory?: string; fallbackDirectories?: string[] } {
+    const currentSession = chatSessionStore.getSessionByConversation('discord', conversationId);
+    const conversation = chatSessionStore.getConversationBySessionId(sessionId);
+    const boundSession = conversation
+      ? chatSessionStore.getSessionByConversation(conversation.platform, conversation.conversationId)
+      : undefined;
+
+    const directory = boundSession?.resolvedDirectory
+      || currentSession?.resolvedDirectory
+      || boundSession?.defaultDirectory
+      || currentSession?.defaultDirectory;
+
+    const fallbackDirectories = Array.from(
+      new Set(
+        [
+          boundSession?.resolvedDirectory,
+          boundSession?.defaultDirectory,
+          currentSession?.resolvedDirectory,
+          currentSession?.defaultDirectory,
+          ...chatSessionStore.getKnownDirectories(),
+        ].filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+      )
+    );
+
+    return {
+      ...(directory ? { directory } : {}),
+      ...(fallbackDirectories.length > 0 ? { fallbackDirectories } : {}),
+    };
+  }
+
   private shouldSkipMessage(event: PlatformMessageEvent, text: string): boolean {
     if (event.senderType === 'bot') {
       return true;
@@ -443,6 +476,17 @@ class DiscordHandler {
         resolvedDirectory: session.directory,
       }
     );
+
+    // 新创建会话，发送帮助和提醒消息
+    await this.safeReply(event, this.getDiscordHelpText());
+    await this.safeReply(event, '当前会话未与opencode绑定，已新建会话并绑定如需切换请按照help提示操作');
+
+    // 标记提醒已发送（失败不阻断主流程）
+    try {
+      chatSessionStore.markReminderSent('discord', event.conversationId);
+    } catch {
+      // 忽略元数据写入失败
+    }
 
     return session.id;
   }
@@ -1645,7 +1689,15 @@ class DiscordHandler {
 
     const decision = parsePermissionDecision(text);
     if (!decision) {
-      await this.safeReply(event, '当前有待确认权限，请回复：允许 / 拒绝 / 始终允许（支持 y / n / always）');
+      await this.safeReply(
+        event,
+        `⚠️ 有待处理的权限请求：
+- 工具：${pending.tool}
+- 说明：${pending.description}
+${pending.risk ? `- 风险：${pending.risk}` : ''}
+
+请回复"允许"或"拒绝"来确认权限。`
+      );
       return true;
     }
 
@@ -1653,7 +1705,8 @@ class DiscordHandler {
       pending.sessionId,
       pending.permissionId,
       decision.allow,
-      decision.remember
+      decision.remember,
+      this.resolvePermissionDirectoryOptions(pending.sessionId, event.conversationId)
     );
 
     if (!responded) {
