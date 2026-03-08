@@ -31,7 +31,7 @@ import {
 async function main() {
 
   console.log('╔════════════════════════════════════════════════╗');
-  console.log('║   飞书 × OpenCode 桥接服务 v2.8.3-beta (Group)  ║');
+  console.log('║   飞书 × OpenCode 桥接服务 v2.8.3 (Group)  ║');
   console.log('╚════════════════════════════════════════════════╝');
 
   // 1. 验证配置
