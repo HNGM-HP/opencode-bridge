@@ -15,6 +15,7 @@ import { commandHandler } from './handlers/command.js';
 import { cardActionHandler } from './handlers/card-action.js';
 import { validateConfig, routerConfig, outputConfig } from './config.js';
 import { rootRouter } from './router/root-router.js';
+import { ConversationHeartbeatEngine } from './reliability/conversation-heartbeat.js';
 import {
   createPermissionActionCallbacks,
   createQuestionActionCallbacks,
@@ -1256,7 +1257,13 @@ async function main() {
   });
 
   // 4. 监听飞书消息（通过路由器分发）
+  const conversationHeartbeatEngine = new ConversationHeartbeatEngine();
   feishuClient.on('message', async (event) => {
+    try {
+      await conversationHeartbeatEngine.onInboundMessage();
+    } catch (error) {
+      console.error('[Heartbeat] 入站触发执行失败:', error);
+    }
     await rootRouter.onMessage(event);
   });
 
