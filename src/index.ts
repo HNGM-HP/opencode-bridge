@@ -13,13 +13,17 @@ import { lifecycleHandler } from './handlers/lifecycle.js';
 import { createDiscordHandler } from './handlers/discord.js';
 import { commandHandler } from './handlers/command.js';
 import { cardActionHandler } from './handlers/card-action.js';
-import { validateConfig, routerConfig, outputConfig } from './config.js';
+import { validateConfig, routerConfig, outputConfig, reliabilityConfig, opencodeConfig } from './config.js';
 import { rootRouter } from './router/root-router.js';
 import { ConversationHeartbeatEngine } from './reliability/conversation-heartbeat.js';
 import { CronScheduler } from './reliability/scheduler.js';
 import { createInternalJobRegistry } from './reliability/job-registry.js';
 import { createProcessCheckJobRunner, createRepairBudgetState } from './reliability/process-check-job.js';
-import { reliabilityConfig } from './config.js';
+import { probeOpenCodeHealth } from './reliability/opencode-probe.js';
+import { decideRescuePolicy } from './reliability/rescue-policy.js';
+import { executeRescuePipeline } from './reliability/rescue-executor.js';
+import { reportRecoveryContext } from './reliability/recovery-reporter.js';
+import { FailureType, RescueState } from './reliability/types.js';
 import {
   createPermissionActionCallbacks,
   createQuestionActionCallbacks,
@@ -70,9 +74,109 @@ export interface ReliabilityLifecycle {
 export const createRescueOrchestrator = (
   logger: Pick<Console, 'info' | 'error'> = console
 ): ReliabilityRescueOrchestrator => {
+  let rescueState: RescueState = RescueState.HEALTHY;
+  let failureCount = 0;
+  let firstFailureAtMs = 0;
+  let repairBudgetRemaining = reliabilityConfig.repairBudget;
+  let lastRepairAtMs: number | undefined;
+
   return {
     runWatchdogProbe: async () => {
-      logger.info('[Reliability] watchdog probe tick');
+      const nowMs = Date.now();
+      try {
+        const probeResult = await probeOpenCodeHealth({
+          host: opencodeConfig.host,
+          port: opencodeConfig.port,
+        });
+
+        if (probeResult.ok) {
+          failureCount = 0;
+          firstFailureAtMs = 0;
+          rescueState = RescueState.HEALTHY;
+          logger.info('[Reliability] watchdog probe healthy');
+          return;
+        }
+
+        failureCount += 1;
+        if (firstFailureAtMs === 0) {
+          firstFailureAtMs = nowMs;
+        }
+
+        const failureType = probeResult.failureType ?? FailureType.OPENCODE_HTTP_DOWN;
+        const policyDecision = decideRescuePolicy({
+          failureType,
+          currentState: rescueState,
+          latestAttemptFailed: true,
+          nowMs,
+          retry: {
+            mode: 'infinite',
+            attempt: failureCount,
+            failureCount,
+            firstFailureAtMs,
+          },
+          rescue: {
+            targetHost: opencodeConfig.host,
+            budgetRemaining: repairBudgetRemaining,
+            lastRepairAtMs,
+          },
+        });
+
+        rescueState = policyDecision.nextState;
+        repairBudgetRemaining = policyDecision.nextBudgetRemaining;
+
+        if (policyDecision.action !== 'repair') {
+          logger.info(`[Reliability] watchdog policy=${policyDecision.action} reason=${policyDecision.reason}`);
+          return;
+        }
+
+        logger.info(`[Reliability] watchdog rescue start reason=${policyDecision.reason}`);
+        const rescueResult = await executeRescuePipeline({
+          lockTargetPath: './logs/opencode-rescue',
+          pidFilePath: './logs/opencode.pid',
+          host: opencodeConfig.host,
+          port: opencodeConfig.port,
+          configPath: process.env.OPENCODE_CONFIG_FILE?.trim() || './opencode.json',
+          serverFields: {
+            host: opencodeConfig.host,
+            port: opencodeConfig.port,
+            auth: {
+              username: opencodeConfig.serverUsername,
+              password: opencodeConfig.serverPassword,
+            },
+          },
+        });
+
+        if (!rescueResult.ok) {
+          rescueState = RescueState.DEGRADED;
+          logger.error(`[Reliability] rescue failed step=${rescueResult.failedStep} reason=${rescueResult.reason}`);
+          return;
+        }
+
+        lastRepairAtMs = Date.now();
+        rescueState = RescueState.RECOVERED;
+        await reportRecoveryContext({
+          failureType,
+          failureReason: policyDecision.reason,
+          backupPath: rescueResult.config.backup.path,
+          nextActions: [
+            '检查 OpenCode 健康端点与认证配置是否长期稳定',
+            '观察下一轮 watchdog 探针，确认故障不再复现',
+          ],
+          selfCheckCommands: [
+            'npm run build',
+            'npm test -- tests/reliability-bootstrap.test.ts',
+          ],
+          context: {
+            policyAction: policyDecision.action,
+            policyReason: policyDecision.reason,
+            trace: rescueResult.trace,
+            health: rescueResult.health,
+          },
+        });
+        logger.info('[Reliability] rescue succeeded and recovery context reported');
+      } catch (error) {
+        logger.error('[Reliability] watchdog probe failed:', error);
+      }
     },
     runStaleCleanup: async () => {
       logger.info('[Reliability] stale cleanup tick');
