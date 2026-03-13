@@ -1,4 +1,40 @@
-import 'dotenv/config';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import dotenv from 'dotenv';
+
+const explicitEnvFile = process.env.OPENCODE_BRIDGE_ENV_FILE?.trim();
+const explicitConfigDir = process.env.OPENCODE_BRIDGE_CONFIG_DIR?.trim();
+const cwdEnvFile = path.join(process.cwd(), '.env');
+const defaultConfigDir = path.join(os.homedir(), '.config', 'opencode-bridge');
+const defaultEnvFile = path.join(defaultConfigDir, '.env');
+
+const resolvedEnvFile = (() => {
+  if (explicitEnvFile) {
+    return path.resolve(explicitEnvFile);
+  }
+
+  if (explicitConfigDir) {
+    return path.join(path.resolve(explicitConfigDir), '.env');
+  }
+
+  if (fs.existsSync(cwdEnvFile)) {
+    return cwdEnvFile;
+  }
+
+  if (fs.existsSync(defaultEnvFile)) {
+    return defaultEnvFile;
+  }
+
+  return undefined;
+})();
+
+if (resolvedEnvFile) {
+  dotenv.config({ path: resolvedEnvFile });
+  process.env.OPENCODE_BRIDGE_ACTIVE_ENV_FILE ??= resolvedEnvFile;
+} else {
+  dotenv.config();
+}
 
 function parseBooleanEnv(value: string | undefined, fallback: boolean): boolean {
   const normalized = normalizeBooleanToken(value);

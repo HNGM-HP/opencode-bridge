@@ -1,3 +1,6 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const envKeys = [
@@ -23,6 +26,11 @@ const envKeys = [
   'RELIABILITY_REPAIR_BUDGET',
   'RELIABILITY_MODE',
   'RELIABILITY_LOOPBACK_ONLY',
+  'OPENCODE_BRIDGE_CONFIG_DIR',
+  'OPENCODE_BRIDGE_ENV_FILE',
+  'OPENCODE_BRIDGE_ACTIVE_ENV_FILE',
+  'FEISHU_APP_ID',
+  'FEISHU_APP_SECRET',
 ];
 
 const backup = new Map<string, string | undefined>();
@@ -132,6 +140,25 @@ describe('ReliabilityConfig - custom values', () => {
     expect(reliabilityConfig.cronForwardToPrivateChat).toBe(true);
     expect(reliabilityConfig.cronFallbackFeishuChatId).toBe('oc_fallback');
     expect(reliabilityConfig.cronFallbackDiscordConversationId).toBe('channel_fallback');
+  });
+
+  it('应支持从指定 config dir 加载 env 文件', async () => {
+    snapshotEnv();
+    delete process.env.FEISHU_APP_ID;
+    delete process.env.FEISHU_APP_SECRET;
+
+    const configRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'opencode-bridge-config-'));
+    fs.writeFileSync(
+      path.join(configRoot, '.env'),
+      'FEISHU_APP_ID=cli_from_config_dir\nFEISHU_APP_SECRET=secret_from_config_dir\n',
+      'utf-8'
+    );
+    process.env.OPENCODE_BRIDGE_CONFIG_DIR = configRoot;
+
+    const configModule = await loadConfigModule();
+    expect(configModule.feishuConfig.appId).toBe('cli_from_config_dir');
+    expect(configModule.feishuConfig.appSecret).toBe('secret_from_config_dir');
+    expect(process.env.OPENCODE_BRIDGE_ACTIVE_ENV_FILE).toBe(path.join(configRoot, '.env'));
   });
 
   it('应支持主动心跳告警会话列表', async () => {
