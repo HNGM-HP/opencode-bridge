@@ -247,6 +247,12 @@ function parsePayload(value: unknown): {
   sessionId?: string;
   directory?: string;
   agent?: string;
+  delivery?: {
+    platform: 'feishu' | 'discord';
+    conversationId: string;
+    creatorId?: string;
+    fallbackConversationId?: string;
+  };
 } {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error('payload is required');
@@ -262,12 +268,44 @@ function parsePayload(value: unknown): {
   const sessionId = toTrimmedString(record.sessionId);
   const directory = toTrimmedString(record.directory);
   const agent = toTrimmedString(record.agent);
+  const delivery = parseDelivery(record.delivery);
   return {
     kind: 'systemEvent',
     text,
     ...(sessionId ? { sessionId } : {}),
     ...(directory ? { directory } : {}),
     ...(agent ? { agent } : {}),
+    ...(delivery ? { delivery } : {}),
+  };
+}
+
+function parseDelivery(value: unknown): {
+  platform: 'feishu' | 'discord';
+  conversationId: string;
+  creatorId?: string;
+  fallbackConversationId?: string;
+} | undefined {
+  if (!value) {
+    return undefined;
+  }
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('delivery must be an object');
+  }
+
+  const record = value as Record<string, unknown>;
+  const platform = toTrimmedString(record.platform);
+  const conversationId = toTrimmedString(record.conversationId);
+  if ((platform !== 'feishu' && platform !== 'discord') || !conversationId) {
+    throw new Error('delivery must include platform and conversationId');
+  }
+
+  const creatorId = toTrimmedString(record.creatorId);
+  const fallbackConversationId = toTrimmedString(record.fallbackConversationId);
+  return {
+    platform,
+    conversationId,
+    ...(creatorId ? { creatorId } : {}),
+    ...(fallbackConversationId ? { fallbackConversationId } : {}),
   };
 }
 
