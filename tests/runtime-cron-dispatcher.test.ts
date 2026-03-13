@@ -87,4 +87,39 @@ describe('runtime-cron-dispatcher', () => {
       expect.stringContaining('今日国际新闻摘要')
     );
   });
+
+  it('旧任务缺少 sessionId 时应从当前窗口绑定推断执行 session', async () => {
+    chatSessionStore.setSessionByConversation('feishu', 'chat-1', 'session-inferred', 'user-1', '群聊-1', {
+      chatType: 'group',
+    });
+
+    const sendMessageAsync = vi.fn(async () => true);
+    const warn = vi.fn();
+    const dispatcher = createRuntimeCronDispatcher({
+      getSessionById: vi.fn(async () => ({ id: 'session-inferred' })),
+      sendMessage: vi.fn(async () => ({ parts: [] })),
+      sendMessageAsync,
+      getSender: vi.fn(() => null),
+      logger: {
+        info: vi.fn(),
+        warn,
+        error: vi.fn(),
+      },
+    });
+
+    await dispatcher.dispatch(buildJob({
+      payload: {
+        kind: 'systemEvent',
+        text: '推送新闻',
+        delivery: {
+          platform: 'feishu',
+          conversationId: 'chat-1',
+          creatorId: 'user-1',
+        },
+      },
+    }));
+
+    expect(sendMessageAsync).toHaveBeenCalledWith('session-inferred', '推送新闻', {});
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('missing sessionId in payload'));
+  });
 });

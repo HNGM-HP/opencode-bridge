@@ -43,14 +43,21 @@ export function createRuntimeCronDispatcher(dependencies: RuntimeCronDispatcherD
         return;
       }
 
-      const sessionId = job.payload.sessionId?.trim();
-      if (!sessionId) {
-        throw new Error(`job ${job.id} is missing bound sessionId`);
-      }
-
       const delivery = job.payload.delivery;
       if (!delivery) {
         throw new Error(`job ${job.id} is missing delivery binding`);
+      }
+
+      const boundSessionId = job.payload.sessionId?.trim();
+      const inferredSessionId = chatSessionStore.getSessionByConversation(delivery.platform, delivery.conversationId)?.sessionId?.trim();
+      const sessionId = boundSessionId || inferredSessionId || '';
+      if (!sessionId) {
+        throw new Error(`job ${job.id} is missing bound sessionId`);
+      }
+      if (!boundSessionId && inferredSessionId) {
+        logger.warn(
+          `[RuntimeCron] job ${job.id} is missing sessionId in payload; inferred ${inferredSessionId} from ${delivery.platform}:${delivery.conversationId}`
+        );
       }
 
       const session = await dependencies.getSessionById(
