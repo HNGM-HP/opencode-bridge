@@ -445,13 +445,14 @@ export function getHelpText(): string {
 • \`/session <sessionId>\` 手动绑定已有会话（需开启 \`ENABLE_MANUAL_SESSION_BIND\`）
 • \`/create_chat\` 或 \`/建群\` 私聊中调出建群卡片（新建或绑定已有会话）
 • \`/project list\` 列出可用项目；\`/project default\` 查看/设置/清除群默认项目
-• \`/clear\` 等价 \`/session new\`；\`/clear free session\` 清理空闲群聊
+• \`/clear\` 等价 \`/session new\`；\`/clear free session\` 清理空闲群聊并手动扫描僵尸 Cron
 • \`/status\` 查看当前绑定状态和群聊生命周期信息
 
 💡 **提示**
 • 切换的模型/角色仅对**当前会话**生效。
 • 强度优先级：\`#临时覆盖\` > \`/effort 会话默认\` > OpenCode 默认。
 • \`/cron\` 支持自然语言，复杂语义默认交给 OpenCode 解析后再落盘为调度任务。
+• Cron 默认绑定创建它的聊天窗口与当前 OpenCode 会话；如果当前聊天没有绑定会话，将拒绝创建。
 • 其他未知 \`/xxx\` 命令会自动透传给 OpenCode（会话已绑定时生效）。
 • 支持透传白名单 shell 命令：\`!cd\`、\`!ls\`、\`!mkdir\`、\`!rm\`、\`!cp\`、\`!mv\`、\`!git\` 等；\`!vi\` / \`!vim\` / \`!nano\` 不会透传。
 • 如果遇到问题，试着使用 \`/panel\` 面板操作更方便。

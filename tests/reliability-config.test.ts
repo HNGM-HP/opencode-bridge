@@ -7,6 +7,10 @@ const envKeys = [
   'RELIABILITY_CRON_API_PORT',
   'RELIABILITY_CRON_API_TOKEN',
   'RELIABILITY_CRON_JOBS_FILE',
+  'RELIABILITY_CRON_ORPHAN_AUTO_CLEANUP',
+  'RELIABILITY_CRON_FORWARD_TO_PRIVATE',
+  'RELIABILITY_CRON_FALLBACK_FEISHU_CHAT_ID',
+  'RELIABILITY_CRON_FALLBACK_DISCORD_CONVERSATION_ID',
   'RELIABILITY_PROACTIVE_HEARTBEAT_ENABLED',
   'RELIABILITY_INBOUND_HEARTBEAT_ENABLED',
   'RELIABILITY_HEARTBEAT_AGENT',
@@ -63,6 +67,10 @@ describe('ReliabilityConfig - default values', () => {
     expect(reliabilityConfig.cronApiEnabled).toBe(false);
     expect(reliabilityConfig.cronApiHost).toBe('127.0.0.1');
     expect(reliabilityConfig.cronApiPort).toBe(4097);
+    expect(reliabilityConfig.cronOrphanAutoCleanup).toBe(false);
+    expect(reliabilityConfig.cronForwardToPrivateChat).toBe(false);
+    expect(reliabilityConfig.cronFallbackFeishuChatId).toBeUndefined();
+    expect(reliabilityConfig.cronFallbackDiscordConversationId).toBeUndefined();
     expect(reliabilityConfig.proactiveHeartbeatEnabled).toBe(false);
     expect(reliabilityConfig.inboundHeartbeatEnabled).toBe(false);
     expect(reliabilityConfig.heartbeatAlertChats).toEqual([]);
@@ -110,6 +118,20 @@ describe('ReliabilityConfig - custom values', () => {
     expect(reliabilityConfig.cronApiEnabled).toBe(true);
     expect(reliabilityConfig.proactiveHeartbeatEnabled).toBe(false);
     expect(reliabilityConfig.inboundHeartbeatEnabled).toBe(true);
+  });
+
+  it('应支持 cron 僵尸清理与私聊回退配置', async () => {
+    snapshotEnv();
+    process.env.RELIABILITY_CRON_ORPHAN_AUTO_CLEANUP = 'true';
+    process.env.RELIABILITY_CRON_FORWARD_TO_PRIVATE = 'true';
+    process.env.RELIABILITY_CRON_FALLBACK_FEISHU_CHAT_ID = 'oc_fallback';
+    process.env.RELIABILITY_CRON_FALLBACK_DISCORD_CONVERSATION_ID = 'channel_fallback';
+
+    const { reliabilityConfig } = await loadConfigModule();
+    expect(reliabilityConfig.cronOrphanAutoCleanup).toBe(true);
+    expect(reliabilityConfig.cronForwardToPrivateChat).toBe(true);
+    expect(reliabilityConfig.cronFallbackFeishuChatId).toBe('oc_fallback');
+    expect(reliabilityConfig.cronFallbackDiscordConversationId).toBe('channel_fallback');
   });
 
   it('应支持主动心跳告警会话列表', async () => {
@@ -308,6 +330,8 @@ describe('ReliabilityConfig - mode validation', () => {
     expect(keys).toContain('heartbeatIntervalMs');
     expect(keys).toContain('cronEnabled');
     expect(keys).toContain('cronApiEnabled');
+    expect(keys).toContain('cronOrphanAutoCleanup');
+    expect(keys).toContain('cronForwardToPrivateChat');
     expect(keys).toContain('proactiveHeartbeatEnabled');
     expect(keys).toContain('inboundHeartbeatEnabled');
     expect(keys).toContain('failureThreshold');

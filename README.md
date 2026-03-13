@@ -408,6 +408,10 @@ node scripts/deploy.mjs status
 | `RELIABILITY_CRON_API_PORT` | 否 | `4097` | Cron API 监听端口 |
 | `RELIABILITY_CRON_API_TOKEN` | 否 | - | Cron API Bearer Token（启用后请求需带 Authorization 头） |
 | `RELIABILITY_CRON_JOBS_FILE` | 否 | `~/cron/jobs.json` | 运行时 Cron 任务持久化文件 |
+| `RELIABILITY_CRON_ORPHAN_AUTO_CLEANUP` | 否 | `false` | 是否自动清理僵尸 Cron（启动扫描 / 群解散或频道删除联动 / stale cleanup） |
+| `RELIABILITY_CRON_FORWARD_TO_PRIVATE` | 否 | `false` | 原聊天窗口失效时，是否允许转发到私聊或备用窗口 |
+| `RELIABILITY_CRON_FALLBACK_FEISHU_CHAT_ID` | 否 | - | Feishu 备用接收 chat_id |
+| `RELIABILITY_CRON_FALLBACK_DISCORD_CONVERSATION_ID` | 否 | - | Discord 备用接收频道/私聊 conversationId |
 | `RELIABILITY_PROACTIVE_HEARTBEAT_ENABLED` | 否 | `false` | 是否启用 Bridge 主动心跳定时器 |
 | `RELIABILITY_INBOUND_HEARTBEAT_ENABLED` | 否 | `false` | 是否启用“入站消息触发心跳”（兼容模式） |
 | `RELIABILITY_HEARTBEAT_INTERVAL_MS` | 否 | `1800000` | Bridge 主动心跳轮询间隔（毫秒） |
@@ -477,6 +481,7 @@ node scripts/deploy.mjs status
 - HTTP API：`/cron/list|add|update|remove`
 - Feishu：`/cron ...`
 - Discord：`///cron ...`
+- 默认行为：Cron 任务会绑定“创建它的聊天窗口 + 当时绑定的 OpenCode 会话”，到点后优先在原会话执行，并把结果回推到原聊天窗口。
 
 同时支持 `/cron` 与 `///cron` 的自然语言语义解析，例如：
 
@@ -491,7 +496,7 @@ node scripts/deploy.mjs status
 - `POST /cron/update`：更新任务
 - `POST /cron/remove`：删除任务
 
-任务持久化到 `RELIABILITY_CRON_JOBS_FILE`（默认 `~/cron/jobs.json`），服务重启后自动恢复。
+任务持久化到 `RELIABILITY_CRON_JOBS_FILE`（默认 `~/cron/jobs.json`），服务重启后自动恢复。若当前聊天没有绑定 OpenCode 会话，则 `/cron add ...` 会拒绝创建，避免后续退化成新开匿名会话执行。
 
 ```bash
 # 列出任务
@@ -503,7 +508,15 @@ curl -X POST http://127.0.0.1:4097/cron/add \
   -d '{
     "name": "daily-check",
     "schedule": { "kind": "cron", "expr": "0 * * * * *" },
-    "payload": { "kind": "systemEvent", "text": "执行例行检查" },
+    "payload": {
+      "kind": "systemEvent",
+      "text": "执行例行检查",
+      "sessionId": "ses_xxx",
+      "delivery": {
+        "platform": "feishu",
+        "conversationId": "oc_xxx"
+      }
+    },
     "enabled": true
   }'
 
@@ -541,6 +554,10 @@ RELIABILITY_CRON_API_HOST=127.0.0.1
 RELIABILITY_CRON_API_PORT=4097
 # RELIABILITY_CRON_API_TOKEN=your-token
 # RELIABILITY_CRON_JOBS_FILE=/absolute/path/jobs.json
+# RELIABILITY_CRON_ORPHAN_AUTO_CLEANUP=false
+# RELIABILITY_CRON_FORWARD_TO_PRIVATE=false
+# RELIABILITY_CRON_FALLBACK_FEISHU_CHAT_ID=oc_xxx
+# RELIABILITY_CRON_FALLBACK_DISCORD_CONVERSATION_ID=1234567890
 
 # 主动心跳开关（默认关闭）
 RELIABILITY_PROACTIVE_HEARTBEAT_ENABLED=false
@@ -588,8 +605,11 @@ flowchart TD
   C --> D[注册到 CronScheduler]
   D --> E[按 cron expr 定时触发]
   E --> F{payload.kind}
-  F -->|systemEvent| G[发送系统事件到 OpenCode Session]
-  G --> H[记录执行状态]
+  F -->|systemEvent| G[检查原聊天窗口与原会话绑定]
+  G -->|绑定仍有效| H[在原 OpenCode 会话执行]
+  H --> I[结果回推原聊天窗口]
+  G -->|原窗口失效且允许转发| J[执行后转发到私聊/备用窗口]
+  G -->|原窗口失效且禁止转发| K[跳过或清理僵尸任务]
 ```
 
 #### 5.2 心跳执行流程
@@ -626,7 +646,21 @@ flowchart TD
 - 配置备份：`<OPENCODE_CONFIG_FILE>.bak.<timestamp>.<sha256>`
 - 恢复通知：自动发送到 OpenCode 会话，消息内包含 `failureReason`、`backupPath`、`nextAction`
 
-### 8) 常用自检命令
+### 8) 僵尸 Cron 与回退策略
+
+- `RELIABILITY_CRON_ORPHAN_AUTO_CLEANUP=false`：
+  - 不在启动时自动扫描 Cron 孤儿任务。
+  - 不在飞书群解散 / Discord 频道删除时自动删除对应 Cron。
+  - 任务执行时若绑定失效，会直接跳过并记录日志。
+- `RELIABILITY_CRON_ORPHAN_AUTO_CLEANUP=true`：
+  - 启动时扫描并删除缺少原窗口绑定或缺少原 session 的僵尸 Cron。
+  - 飞书群解散、Discord 频道删除时，联动删除绑定到该窗口的 Cron。
+  - `stale-cleanup` 周期任务也会继续扫描僵尸 Cron。
+- `RELIABILITY_CRON_FORWARD_TO_PRIVATE=true`：
+  - 当原聊天窗口失效、但原 session 仍可执行且未绑定到别的活动窗口时，可把结果转发到私聊/备用窗口。
+  - 备用目标优先级：任务显式 fallback > env fallback id > 同平台创建者私聊。
+
+### 9) 常用自检命令
 
 ```bash
 # 1) 检查 OpenCode 本地环境
@@ -756,8 +790,8 @@ npm test -- tests/reliability-rescue.e2e.test.ts
 | `/session <sessionId>` | 手动绑定已有 OpenCode 会话（支持 Web 端创建的跨工作区会话；需启用 `ENABLE_MANUAL_SESSION_BIND`） |
 | `新建会话窗口` | 自然语言触发新建会话（等价 `/session new`） |
 | `/clear` | 等价于 `/session new` |
-| `/clear free session` / `/clear_free_session` | 手动触发一次与启动清理同规则的兜底扫描 |
-| `/clear free session <sessionId>` / `/clear_free_session <sessionId>` | 删除指定 OpenCode 会话，并移除所有本地绑定映射 |
+| `/clear free session` / `/clear_free_session` | 手动触发一次与启动清理同规则的兜底扫描，并顺带清理僵尸 Cron |
+| `/clear free session <sessionId>` / `/clear_free_session <sessionId>` | 删除指定 OpenCode 会话，并移除所有本地绑定映射与该会话绑定的 Cron |
 | `/compact` | 调用 OpenCode summarize，压缩当前会话上下文 |
 | `!<shell命令>` | 透传白名单 shell 命令（如 `!ls`、`!pwd`、`!mkdir`、`!git status`） |
 | `/create_chat` / `/建群` | 私聊中调出建群卡片（下拉选择后点击"创建群聊"生效） |

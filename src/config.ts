@@ -277,6 +277,14 @@ export const reliabilityConfig = {
   // 运行时 Cron 任务持久化文件（可选，默认 ~/cron/jobs.json）
   cronJobsFile: process.env.RELIABILITY_CRON_JOBS_FILE?.trim() || undefined,
 
+  cronOrphanAutoCleanup: parseBooleanEnv(process.env.RELIABILITY_CRON_ORPHAN_AUTO_CLEANUP, false),
+
+  cronForwardToPrivateChat: parseBooleanEnv(process.env.RELIABILITY_CRON_FORWARD_TO_PRIVATE, false),
+
+  cronFallbackFeishuChatId: process.env.RELIABILITY_CRON_FALLBACK_FEISHU_CHAT_ID?.trim() || undefined,
+
+  cronFallbackDiscordConversationId: process.env.RELIABILITY_CRON_FALLBACK_DISCORD_CONVERSATION_ID?.trim() || undefined,
+
   // 是否启用主动心跳（Bridge 定时器触发）
   proactiveHeartbeatEnabled: parseBooleanEnv(process.env.RELIABILITY_PROACTIVE_HEARTBEAT_ENABLED, false),
 
