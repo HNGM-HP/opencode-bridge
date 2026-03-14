@@ -1,4 +1,9 @@
 import { normalizeEffortLevel, stripPromptEffortPrefix, type EffortLevel } from './effort.js';
+import {
+  buildCronHelpText,
+  parseCronSlashIntent,
+  type CronIntentAction,
+} from '../reliability/cron-control.js';
 
 // 命令类型定义
 export type CommandType =
@@ -21,7 +26,9 @@ export type CommandType =
   | 'command'      // 透传命令
   | 'permission'   // 权限响应
   | 'send'         // 发送文件到飞书
-  | 'rename';      // 重命名当前会话
+  | 'rename'       // 重命名当前会话
+  | 'cron'         // Cron 调度管理
+  | 'restart';     // 重启服务组件
 
 // 解析后的命令
 export interface ParsedCommand {
@@ -50,6 +57,10 @@ export interface ParsedCommand {
   promptEffort?: EffortLevel;
   adminAction?: 'add';
   renameTitle?: string;    // rename 类型的新会话名称（可选，无参数时弹卡片）
+  cronAction?: CronIntentAction;
+  cronArgs?: string;
+  cronSource?: 'slash' | 'natural';
+  restartTarget?: string;
 }
 
 const BANG_SHELL_ALLOWED_COMMANDS = new Set([
@@ -177,6 +188,24 @@ export function parseCommand(text: string): ParsedCommand {
 
     const cmd = parts[0].toLowerCase();
     const args = parts.slice(1);
+    const rawArgsText = body.slice(parts[0].length).trim();
+
+    if (cmd === 'cron') {
+      const cronIntent = parseCronSlashIntent(rawArgsText);
+      return {
+        type: 'cron',
+        cronAction: cronIntent.action,
+        cronArgs: cronIntent.argsText,
+        cronSource: 'slash',
+      };
+    }
+
+    if (cmd === 'restart') {
+      return {
+        type: 'restart',
+        restartTarget: args[0]?.trim().toLowerCase() || '',
+      };
+    }
 
     switch (cmd) {
       case 'stop':
@@ -383,6 +412,7 @@ export function parseCommand(text: string): ParsedCommand {
 
 // 生成帮助文本
 export function getHelpText(): string {
+  const cronHelpBlock = buildCronHelpText('feishu');
   return `📖 **飞书 × OpenCode 机器人指南**
 
 💬 **如何对话**
@@ -415,17 +445,22 @@ export function getHelpText(): string {
 • \`/session <sessionId>\` 手动绑定已有会话（需开启 \`ENABLE_MANUAL_SESSION_BIND\`）
 • \`/create_chat\` 或 \`/建群\` 私聊中调出建群卡片（新建或绑定已有会话）
 • \`/project list\` 列出可用项目；\`/project default\` 查看/设置/清除群默认项目
-• \`/clear\` 等价 \`/session new\`；\`/clear free session\` 清理空闲群聊
+• \`/clear\` 等价 \`/session new\`；\`/clear free session\` 清理空闲群聊并手动扫描僵尸 Cron
 • \`/status\` 查看当前绑定状态和群聊生命周期信息
 
 💡 **提示**
 • 切换的模型/角色仅对**当前会话**生效。
 • 强度优先级：\`#临时覆盖\` > \`/effort 会话默认\` > OpenCode 默认。
+• \`/cron\` 支持自然语言，复杂语义默认交给 OpenCode 解析后再落盘为调度任务。
+• Cron 默认绑定创建它的聊天窗口与当前 OpenCode 会话；如果当前聊天没有绑定会话，将拒绝创建。
 • 其他未知 \`/xxx\` 命令会自动透传给 OpenCode（会话已绑定时生效）。
 • 支持透传白名单 shell 命令：\`!cd\`、\`!ls\`、\`!mkdir\`、\`!rm\`、\`!cp\`、\`!mv\`、\`!git\` 等；\`!vi\` / \`!vim\` / \`!nano\` 不会透传。
 • 如果遇到问题，试着使用 \`/panel\` 面板操作更方便。
 
 📤 **文件发送**
 • \`/send <绝对路径>\` 直接发送文件到群聊 (e.g. \`/send /path/to/file.png\` 或 \`/send C:\\Users\\你\\Desktop\\图片.jpg\`)
-• \`发送文件 <路径或描述>\` 中文自然语言触发（同上）`;
+• \`发送文件 <路径或描述>\` 中文自然语言触发（同上）
+• \`/restart opencode\` 重启本地 OpenCode 进程（仅 loopback）
+
+${cronHelpBlock}`;
 }

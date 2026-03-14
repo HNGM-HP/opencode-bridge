@@ -20,6 +20,9 @@ import type {
 import { discordConfig } from '../../config.js';
 import { opencodeClient } from '../../opencode/client.js';
 import { chatSessionStore } from '../../store/chat-session.js';
+import { reliabilityConfig } from '../../config.js';
+import { getRuntimeCronManager } from '../../reliability/runtime-cron-registry.js';
+import { cleanupRuntimeCronJobsByConversation } from '../../reliability/runtime-cron-orphan.js';
 
 const DISCORD_MESSAGE_LIMIT = 1800;
 
@@ -392,6 +395,9 @@ export class DiscordAdapter implements PlatformAdapter {
         const sessionData = chatSessionStore.getSessionByConversation('discord', channel.id);
         const sessionId = sessionData?.sessionId;
         const shouldDeleteSession = Boolean(sessionId) && sessionData?.protectSessionDelete !== true;
+        if (reliabilityConfig.cronOrphanAutoCleanup) {
+          cleanupRuntimeCronJobsByConversation(getRuntimeCronManager(), 'discord', channel.id);
+        }
         chatSessionStore.removeSessionByConversation('discord', channel.id);
         console.log(`[Discord] 频道已删除，自动解绑会话: ${channel.id}`);
 

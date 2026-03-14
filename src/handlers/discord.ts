@@ -27,6 +27,16 @@ import { chatSessionStore } from '../store/chat-session.js';
 import { validateFilePath } from './file-sender.js';
 import { DirectoryPolicy } from '../utils/directory-policy.js';
 import type { PlatformMessageEvent, PlatformSender } from '../platform/types.js';
+import {
+  buildCronHelpText,
+  executeCronIntent,
+  parseCronSlashIntent,
+  resolveCronIntentForExecution,
+  type CronIntent,
+} from '../reliability/cron-control.js';
+import { getRuntimeCronManager } from '../reliability/runtime-cron-registry.js';
+import { formatRestartResultText, restartOpenCodeProcess } from '../reliability/opencode-restart.js';
+import { parseCronIntentWithOpenCode } from '../reliability/cron-semantic.js';
 
 const PANEL_SELECT_PREFIX = 'oc_panel';
 const BIND_SELECT_PREFIX = 'oc_bind';
@@ -1525,6 +1535,7 @@ class DiscordHandler {
   }
 
   private getDiscordHelpText(): string {
+    const cronHelpBlock = buildCronHelpText('discord');
     return [
       'Discord 命令速查（推荐 `///` 前缀）:',
       '- `///session`: 查看当前频道会话',
@@ -1542,12 +1553,44 @@ class DiscordHandler {
       '- `///undo`: 回撤上一轮',
       '- `///compact` 或 `///compat`: 压缩上下文',
       '- `///send <绝对路径>`: 发送白名单文件到当前频道',
+      '- `///restart opencode`: 重启本地 OpenCode 进程（仅 loopback）',
       '- `///stop`: 停止当前频道会话',
       '- `///clear`: 清理并解绑当前会话',
       '- `///create_chat`: 打开会话控制面板',
       '- `///create_chat model <页码>`: 打开模型分页下拉（最多 500 条）',
       '- `///create_chat session|agent|effort`: 打开分类控制面板',
+      '',
+      cronHelpBlock,
     ].join('\n');
+  }
+
+  private async handleCronIntent(event: PlatformMessageEvent, intent: CronIntent): Promise<void> {
+    const manager = getRuntimeCronManager();
+    const session = chatSessionStore.getSessionByConversation('discord', event.conversationId);
+    const resolvedIntent = await resolveCronIntentForExecution({
+      source: intent.source,
+      action: intent.action,
+      argsText: intent.argsText,
+      semanticParser: async (argsText, source, actionHint) => {
+        return await parseCronIntentWithOpenCode({
+          argsText,
+          source,
+          actionHint,
+          directory: session?.resolvedDirectory || session?.defaultDirectory,
+        });
+      },
+    });
+
+    const resultText = executeCronIntent({
+      manager,
+      intent: resolvedIntent,
+      currentSessionId: session?.sessionId,
+      currentDirectory: session?.resolvedDirectory || session?.defaultDirectory,
+      currentConversationId: event.conversationId,
+      creatorId: event.senderId,
+      platform: 'discord',
+    });
+    await this.safeReply(event, resultText);
   }
 
   private async handleCommand(event: PlatformMessageEvent, command: DiscordCommand): Promise<boolean> {
@@ -1558,6 +1601,12 @@ class DiscordHandler {
 
     if (command.name === 'session' || command.name === 'status') {
       await this.handleSessionCommand(event);
+      return true;
+    }
+
+    if (command.name === 'cron') {
+      const intent = parseCronSlashIntent(command.args);
+      await this.handleCronIntent(event, intent);
       return true;
     }
 
@@ -1613,6 +1662,19 @@ class DiscordHandler {
 
     if (command.name === 'stop') {
       await this.handleStopCommand(event);
+      return true;
+    }
+
+    if (command.name === 'restart') {
+      const target = command.args.trim().toLowerCase();
+      if (target !== 'opencode') {
+        await this.safeReply(event, '用法：`///restart opencode`');
+        return true;
+      }
+
+      await this.safeReply(event, '🔄 正在重启 OpenCode，请稍候...');
+      const result = await restartOpenCodeProcess();
+      await this.safeReply(event, formatRestartResultText(result));
       return true;
     }
 

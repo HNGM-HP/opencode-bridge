@@ -15,6 +15,11 @@ import { modelConfig, userConfig } from '../config.js';
 import { sendFileToFeishu } from './file-sender.js';
 import { lifecycleHandler } from './lifecycle.js';
 import { DirectoryPolicy } from '../utils/directory-policy.js';
+import { executeCronIntent, resolveCronIntentForExecution } from '../reliability/cron-control.js';
+import { getRuntimeCronManager } from '../reliability/runtime-cron-registry.js';
+import { formatRestartResultText, restartOpenCodeProcess } from '../reliability/opencode-restart.js';
+import { parseCronIntentWithOpenCode } from '../reliability/cron-semantic.js';
+import { cleanupRuntimeCronJobsBySessionId, scanAndCleanupOrphanRuntimeCronJobs } from '../reliability/runtime-cron-orphan.js';
 
 const SUPPORTED_ROLE_TOOLS = [
   'bash',
@@ -778,7 +783,7 @@ export class CommandHandler {
           }
           break;
 
-        case 'stop':
+        case 'stop': {
           const sessionId = chatSessionStore.getSessionId(chatId);
           if (sessionId) {
             await opencodeClient.abortSession(sessionId);
@@ -787,6 +792,7 @@ export class CommandHandler {
             await feishuClient.reply(messageId, '当前没有活跃的会话');
           }
           break;
+        }
 
         case 'compact':
           await this.handleCompact(chatId, messageId);
@@ -843,6 +849,14 @@ export class CommandHandler {
           await this.handleRename(chatId, messageId, command.renameTitle);
           break;
 
+        case 'cron':
+          await this.handleCronCommand(chatId, messageId, context.senderId, command);
+          break;
+
+        case 'restart':
+          await this.handleRestartCommand(messageId, command.restartTarget);
+          break;
+
         // 其他命令透传
         default:
           await this.handlePassthroughCommand(chatId, messageId, command.type.replace(/^\//, ''), command.commandArgs || '');
@@ -884,6 +898,53 @@ export class CommandHandler {
     } else {
       await feishuClient.reply(messageId, '❌ 重命名失败，请稍后重试');
     }
+  }
+
+  private async handleCronCommand(
+    chatId: string,
+    messageId: string,
+    senderId: string,
+    command: ParsedCommand
+  ): Promise<void> {
+    const manager = getRuntimeCronManager();
+    const session = chatSessionStore.getSession(chatId);
+    const intent = await resolveCronIntentForExecution({
+      source: command.cronSource || 'slash',
+      action: command.cronAction,
+      argsText: command.cronArgs || '',
+      semanticParser: async (argsText, source, actionHint) => {
+        return await parseCronIntentWithOpenCode({
+          argsText,
+          source,
+          actionHint,
+          directory: session?.resolvedDirectory || session?.defaultDirectory,
+        });
+      },
+    });
+
+    const resultText = executeCronIntent({
+      manager,
+      intent,
+      currentSessionId: session?.sessionId,
+      currentDirectory: session?.resolvedDirectory || session?.defaultDirectory,
+      currentConversationId: chatId,
+      creatorId: senderId,
+      platform: 'feishu',
+    });
+
+    await feishuClient.reply(messageId, resultText);
+  }
+
+  private async handleRestartCommand(messageId: string, target?: string): Promise<void> {
+    const normalizedTarget = (target || '').trim().toLowerCase();
+    if (normalizedTarget !== 'opencode') {
+      await feishuClient.reply(messageId, '用法: /restart opencode');
+      return;
+    }
+
+    await feishuClient.reply(messageId, '🔄 正在重启 OpenCode，请稍候...');
+    const result = await restartOpenCodeProcess();
+    await feishuClient.reply(messageId, formatRestartResultText(result));
   }
 
   private async handleStatus(chatId: string, messageId: string): Promise<void> {
@@ -1922,11 +1983,14 @@ export class CommandHandler {
         chatSessionStore.removeSession(boundChatId);
       }
 
+      const cronCleanup = cleanupRuntimeCronJobsBySessionId(getRuntimeCronManager(), normalizedTargetSessionId);
+
       const lines = [
         '✅ 指定会话已删除',
         `- 工作区目录: ${targetSession.directory || '-'}`,
         `- 会话ID: ${normalizedTargetSessionId}`,
         `- 清理本地映射: ${boundChatIds.length} 个群`,
+        `- 清理绑定 Cron: ${cronCleanup.removedJobIds.length} 个`,
       ];
       if (protectedBindingCount > 0) {
         lines.push(`- 删除保护映射: ${protectedBindingCount} 个（手动删除已强制执行）`);
@@ -1938,10 +2002,30 @@ export class CommandHandler {
     // 无 targetSessionId：扫描并清理所有空闲群聊
     await feishuClient.reply(messageId, '🧹 正在扫描并清理无效群聊...');
     const stats = await lifecycleHandler.runCleanupScan();
+    const cronCleanup = await scanAndCleanupOrphanRuntimeCronJobs(getRuntimeCronManager(), {
+      hasConversationBinding: (platform, conversationId, sessionId) => {
+        const binding = chatSessionStore.getSessionByConversation(platform, conversationId);
+        if (!binding) {
+          return false;
+        }
+        return !sessionId || binding.sessionId === sessionId;
+      },
+      getSessionStatus: async (sessionId, directory) => {
+        try {
+          const session = await opencodeClient.getSessionById(
+            sessionId,
+            directory ? { directory } : undefined
+          );
+          return session ? 'exists' : 'missing';
+        } catch {
+          return 'unknown';
+        }
+      },
+    });
 
     await feishuClient.reply(
       messageId,
-      `✅ 清理完成\n- 扫描群聊: ${stats.scannedChats} 个\n- 解散群聊: ${stats.disbandedChats} 个\n- 清理会话: ${stats.deletedSessions} 个\n- 跳过删除(受保护): ${stats.skippedProtectedSessions} 个\n- 移除孤儿映射: ${stats.removedOrphanMappings} 个`
+      `✅ 清理完成\n- 扫描群聊: ${stats.scannedChats} 个\n- 解散群聊: ${stats.disbandedChats} 个\n- 清理会话: ${stats.deletedSessions} 个\n- 跳过删除(受保护): ${stats.skippedProtectedSessions} 个\n- 移除孤儿映射: ${stats.removedOrphanMappings} 个\n- 自动清理 Cron: ${stats.removedCronJobs} 个\n- 手动清理僵尸 Cron: ${cronCleanup.removedJobIds.length} 个`
     );
   }
 

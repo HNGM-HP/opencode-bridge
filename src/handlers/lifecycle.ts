@@ -1,7 +1,9 @@
 import { feishuClient } from '../feishu/client.js';
 import { chatSessionStore } from '../store/chat-session.js';
 import { opencodeClient } from '../opencode/client.js';
-import { userConfig } from '../config.js';
+import { reliabilityConfig, userConfig } from '../config.js';
+import { getRuntimeCronManager } from '../reliability/runtime-cron-registry.js';
+import { cleanupRuntimeCronJobsByConversation } from '../reliability/runtime-cron-orphan.js';
 
 export interface CleanupStats {
   scannedChats: number;
@@ -9,6 +11,7 @@ export interface CleanupStats {
   deletedSessions: number;
   skippedProtectedSessions: number;
   removedOrphanMappings: number;
+  removedCronJobs: number;
 }
 
 export class LifecycleHandler {
@@ -17,7 +20,7 @@ export class LifecycleHandler {
     console.log('[Lifecycle] 正在检查无效群聊...');
     const stats = await this.runCleanupScan();
     console.log(
-      `[Lifecycle] 清理统计: scanned=${stats.scannedChats}, disbanded=${stats.disbandedChats}, deletedSession=${stats.deletedSessions}, skippedProtected=${stats.skippedProtectedSessions}, removedOrphanMappings=${stats.removedOrphanMappings}`
+      `[Lifecycle] 清理统计: scanned=${stats.scannedChats}, disbanded=${stats.disbandedChats}, deletedSession=${stats.deletedSessions}, skippedProtected=${stats.skippedProtectedSessions}, removedOrphanMappings=${stats.removedOrphanMappings}, removedCronJobs=${stats.removedCronJobs}`
     );
     console.log('[Lifecycle] 清理完成');
   }
@@ -29,6 +32,7 @@ export class LifecycleHandler {
       deletedSessions: 0,
       skippedProtectedSessions: 0,
       removedOrphanMappings: 0,
+      removedCronJobs: 0,
     };
 
     const chats = await feishuClient.getUserChats();
@@ -44,6 +48,10 @@ export class LifecycleHandler {
         if (activeChatIdSet.has(mappedChatId)) continue;
         if (!chatSessionStore.isGroupChatSession(mappedChatId)) {
           continue;
+        }
+        if (reliabilityConfig.cronOrphanAutoCleanup) {
+          const cronCleanup = cleanupRuntimeCronJobsByConversation(getRuntimeCronManager(), 'feishu', mappedChatId);
+          stats.removedCronJobs += cronCleanup.removedJobIds.length;
         }
         chatSessionStore.removeSession(mappedChatId);
         stats.removedOrphanMappings += 1;
@@ -126,6 +134,13 @@ export class LifecycleHandler {
         }
       }
       chatSessionStore.removeSession(chatId);
+    }
+
+    if (reliabilityConfig.cronOrphanAutoCleanup) {
+      const cronCleanup = cleanupRuntimeCronJobsByConversation(getRuntimeCronManager(), 'feishu', chatId);
+      if (stats) {
+        stats.removedCronJobs += cronCleanup.removedJobIds.length;
+      }
     }
 
     // 2. 解散飞书群

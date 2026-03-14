@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process';
 import { feishuClient, type FeishuMessageEvent } from './feishu/client.js';
 import { feishuAdapter } from './platform/adapters/feishu-adapter.js';
 import { discordAdapter } from './platform/adapters/discord-adapter.js';
@@ -13,8 +14,23 @@ import { lifecycleHandler } from './handlers/lifecycle.js';
 import { createDiscordHandler } from './handlers/discord.js';
 import { commandHandler } from './handlers/command.js';
 import { cardActionHandler } from './handlers/card-action.js';
-import { validateConfig, routerConfig, outputConfig } from './config.js';
+import { validateConfig, routerConfig, outputConfig, reliabilityConfig, opencodeConfig } from './config.js';
 import { rootRouter } from './router/root-router.js';
+import { ConversationHeartbeatEngine } from './reliability/conversation-heartbeat.js';
+import { CronScheduler } from './reliability/scheduler.js';
+import { createInternalJobRegistry } from './reliability/job-registry.js';
+import { createProcessCheckJobRunner, createRepairBudgetState } from './reliability/process-check-job.js';
+import { createProactiveHeartbeatRunner } from './reliability/proactive-heartbeat.js';
+import { RuntimeCronManager } from './reliability/runtime-cron.js';
+import { createCronApiServer } from './reliability/cron-api-server.js';
+import { getRuntimeCronManager, setRuntimeCronManager } from './reliability/runtime-cron-registry.js';
+import { createRuntimeCronDispatcher } from './reliability/runtime-cron-dispatcher.js';
+import { cleanupRuntimeCronJobsByConversation, scanAndCleanupOrphanRuntimeCronJobs } from './reliability/runtime-cron-orphan.js';
+import { probeOpenCodeHealth } from './reliability/opencode-probe.js';
+import { decideRescuePolicy } from './reliability/rescue-policy.js';
+import { executeRescuePipeline } from './reliability/rescue-executor.js';
+import { reportRecoveryContext } from './reliability/recovery-reporter.js';
+import { FailureType, RescueState } from './reliability/types.js';
 import {
   createPermissionActionCallbacks,
   createQuestionActionCallbacks,
@@ -28,10 +44,458 @@ import {
   type StreamCardPendingQuestion,
 } from './feishu/cards-stream.js';
 
+export interface ReliabilityRescueOrchestrator {
+  runWatchdogProbe: () => Promise<void> | void;
+  runStaleCleanup: () => Promise<void> | void;
+  runBudgetReset: () => Promise<void> | void;
+  cleanup: () => Promise<void> | void;
+}
+
+export interface ReliabilityJobHandlers {
+  watchdogProbe: () => Promise<void>;
+  processConsistencyCheck: () => Promise<void>;
+  staleCleanup: () => Promise<void>;
+  budgetReset: () => Promise<void>;
+}
+
+export interface ReliabilityScheduler {
+  start: () => void;
+  stop: () => Promise<void>;
+}
+
+export interface ReliabilityLifecycleDependencies {
+  createHeartbeatEngine?: () => Pick<ConversationHeartbeatEngine, 'onInboundMessage'>;
+  createScheduler?: () => ReliabilityScheduler;
+  createRescueOrchestrator?: () => ReliabilityRescueOrchestrator;
+  createJobRegistry?: (handlers: ReliabilityJobHandlers) => {
+    registerAll: (scheduler: ReliabilityScheduler) => void;
+  };
+  logger?: Pick<Console, 'info' | 'error'>;
+}
+
+export interface ReliabilityLifecycle {
+  onInboundMessage: () => Promise<void>;
+  cleanup: () => Promise<void>;
+}
+
+export const createRescueOrchestrator = (
+  logger: Pick<Console, 'info' | 'error'> = console
+): ReliabilityRescueOrchestrator => {
+  let rescueState: RescueState = RescueState.HEALTHY;
+  let failureCount = 0;
+  let firstFailureAtMs = 0;
+  let repairBudgetRemaining = reliabilityConfig.repairBudget;
+  let lastRepairAtMs: number | undefined;
+  const HEALTHY_LOG_INTERVAL_MS = 10 * 60 * 1000;
+  const WAIT_LOG_INTERVAL_MS = 5 * 60 * 1000;
+  let lastHealthyLogAtMs = 0;
+  let lastPolicyLogAtMs = 0;
+  let lastPolicySignature = '';
+
+  return {
+    runWatchdogProbe: async () => {
+      const nowMs = Date.now();
+      try {
+        const probeResult = await probeOpenCodeHealth({
+          host: opencodeConfig.host,
+          port: opencodeConfig.port,
+        });
+
+        if (probeResult.ok) {
+          failureCount = 0;
+          firstFailureAtMs = 0;
+          rescueState = RescueState.HEALTHY;
+          const shouldLogHealthy =
+            lastHealthyLogAtMs === 0 || nowMs - lastHealthyLogAtMs >= HEALTHY_LOG_INTERVAL_MS;
+          if (shouldLogHealthy) {
+            logger.info('[Reliability] watchdog probe healthy');
+            lastHealthyLogAtMs = nowMs;
+          }
+          return;
+        }
+
+        failureCount += 1;
+        if (firstFailureAtMs === 0) {
+          firstFailureAtMs = nowMs;
+        }
+
+        const failureType = probeResult.failureType ?? FailureType.OPENCODE_HTTP_DOWN;
+        const policyDecision = decideRescuePolicy({
+          failureType,
+          currentState: rescueState,
+          latestAttemptFailed: true,
+          nowMs,
+          retry: {
+            mode: 'infinite',
+            attempt: failureCount,
+            failureCount,
+            firstFailureAtMs,
+          },
+          rescue: {
+            targetHost: opencodeConfig.host,
+            budgetRemaining: repairBudgetRemaining,
+            lastRepairAtMs,
+          },
+        });
+
+        rescueState = policyDecision.nextState;
+        repairBudgetRemaining = policyDecision.nextBudgetRemaining;
+
+        if (policyDecision.action !== 'repair') {
+          const signature = `${policyDecision.action}:${policyDecision.reason}`;
+          const shouldLogPolicy =
+            signature !== lastPolicySignature
+            || lastPolicyLogAtMs === 0
+            || nowMs - lastPolicyLogAtMs >= WAIT_LOG_INTERVAL_MS;
+          if (shouldLogPolicy) {
+            logger.info(`[Reliability] watchdog policy=${policyDecision.action} reason=${policyDecision.reason}`);
+            lastPolicyLogAtMs = nowMs;
+            lastPolicySignature = signature;
+          }
+          return;
+        }
+
+        logger.info(`[Reliability] watchdog rescue start reason=${policyDecision.reason}`);
+
+        const startOpenCode = async (): Promise<void> => {
+          return new Promise((resolve, reject) => {
+            try {
+              const child = spawn('opencode', [], {
+                detached: true,
+                stdio: 'ignore',
+              });
+              child.unref();
+              setTimeout(() => resolve(), 2000);
+            } catch (error) {
+              reject(error);
+            }
+          });
+        };
+
+        const rescueResult = await executeRescuePipeline({
+          lockTargetPath: './logs/opencode-rescue',
+          pidFilePath: './logs/opencode.pid',
+          host: opencodeConfig.host,
+          port: opencodeConfig.port,
+          configPath: process.env.OPENCODE_CONFIG_FILE?.trim() || './opencode.json',
+          serverFields: {
+            host: opencodeConfig.host,
+            port: opencodeConfig.port,
+            auth: {
+              username: opencodeConfig.serverUsername,
+              password: opencodeConfig.serverPassword,
+            },
+          },
+          startOpenCode,
+        });
+
+        if (!rescueResult.ok) {
+          rescueState = RescueState.DEGRADED;
+          logger.error(`[Reliability] rescue failed step=${rescueResult.failedStep} reason=${rescueResult.reason}`);
+          return;
+        }
+
+        lastRepairAtMs = Date.now();
+        rescueState = RescueState.RECOVERED;
+        await reportRecoveryContext({
+          failureType,
+          failureReason: policyDecision.reason,
+          backupPath: rescueResult.config.backup.path,
+          nextActions: [
+            '检查 OpenCode 健康端点与认证配置是否长期稳定',
+            '观察下一轮 watchdog 探针，确认故障不再复现',
+          ],
+          selfCheckCommands: [
+            'npm run build',
+            'npm test -- tests/reliability-bootstrap.test.ts',
+          ],
+          context: {
+            policyAction: policyDecision.action,
+            policyReason: policyDecision.reason,
+            trace: rescueResult.trace,
+            health: rescueResult.health,
+          },
+        });
+        logger.info('[Reliability] rescue succeeded and recovery context reported');
+      } catch (error) {
+        logger.error('[Reliability] watchdog probe failed:', error);
+      }
+    },
+    runStaleCleanup: async () => {
+      logger.info('[Reliability] stale cleanup tick');
+    },
+    runBudgetReset: async () => {
+      logger.info('[Reliability] budget reset tick');
+    },
+    cleanup: async () => {
+      logger.info('[Reliability] rescue orchestrator cleaned');
+    },
+  };
+};
+
+export const bootstrapReliabilityLifecycle = (
+  dependencies: ReliabilityLifecycleDependencies = {}
+): ReliabilityLifecycle => {
+  const logger = dependencies.logger ?? console;
+  const shouldUseInboundHeartbeat = reliabilityConfig.inboundHeartbeatEnabled || Boolean(dependencies.createHeartbeatEngine);
+  const heartbeatEngine = dependencies.createHeartbeatEngine?.()
+    ?? new ConversationHeartbeatEngine({
+      windowMs: reliabilityConfig.heartbeatIntervalMs,
+    });
+  const scheduler = dependencies.createScheduler?.() ?? new CronScheduler();
+  const rescueOrchestrator = dependencies.createRescueOrchestrator?.() ?? createRescueOrchestrator(logger);
+
+  // 初始化 process check job runner
+  const repairBudgetState = createRepairBudgetState(reliabilityConfig.repairBudget);
+  const processCheckRunner = createProcessCheckJobRunner({
+    bridgePidFilePath: './logs/bridge.pid',
+    opencodePidFilePath: './logs/opencode.pid',
+    opencodeHost: 'localhost',
+    opencodePort: 4096,
+    repairBudgetState,
+    staleLockPaths: [],
+  });
+
+  const jobHandlers: ReliabilityJobHandlers = {
+    watchdogProbe: async () => {
+      await rescueOrchestrator.runWatchdogProbe();
+    },
+    processConsistencyCheck: async () => {
+      await processCheckRunner.checkProcessConsistency();
+    },
+    staleCleanup: async () => {
+      await rescueOrchestrator.runStaleCleanup();
+      await cleanupOrphanCronJobs();
+    },
+    budgetReset: async () => {
+      await processCheckRunner.resetBudget();
+    },
+  };
+
+  const registry = dependencies.createJobRegistry?.(jobHandlers)
+    ?? {
+      registerAll: (injectedScheduler: ReliabilityScheduler) => {
+        if (!(injectedScheduler instanceof CronScheduler)) {
+          throw new Error('[Reliability] 默认任务注册器要求 CronScheduler 实例');
+        }
+        createInternalJobRegistry({
+          handlers: jobHandlers,
+        }).registerAll(injectedScheduler as CronScheduler);
+      },
+    };
+
+  registry.registerAll(scheduler);
+
+  let runtimeCronManager: RuntimeCronManager | null = null;
+  const runtimeCronDispatcher = createRuntimeCronDispatcher({
+    getSessionById: async (sessionId, options) => {
+      return await opencodeClient.getSessionById(sessionId, options);
+    },
+    sendMessage: async (sessionId, text, options) => {
+      return await opencodeClient.sendMessage(sessionId, text, options);
+    },
+    sendMessageAsync: async (sessionId, text, options) => {
+      await opencodeClient.sendMessageAsync(sessionId, text, options);
+      return true;
+    },
+    getSender: platform => {
+      if (platform === 'feishu') {
+        return feishuAdapter.getSender();
+      }
+      if (platform === 'discord') {
+        return discordAdapter.getSender();
+      }
+      return null;
+    },
+    logger: {
+      info: message => {
+        logger.info(message);
+      },
+      warn: message => {
+        logger.info(message);
+      },
+      error: (...args: unknown[]) => {
+        logger.error('[RuntimeCronDispatch]', ...args);
+      },
+    },
+  });
+  if (scheduler instanceof CronScheduler) {
+    runtimeCronManager = new RuntimeCronManager({
+      scheduler,
+      filePath: reliabilityConfig.cronJobsFile,
+      dispatchPayload: async (job) => {
+        await runtimeCronDispatcher.dispatch(job);
+      },
+      logger: {
+        info: message => {
+          logger.info(message);
+        },
+        warn: message => {
+          logger.info(message);
+        },
+        error: (...args: unknown[]) => {
+          logger.error('[RuntimeCron]', ...args);
+        },
+      },
+    });
+    setRuntimeCronManager(runtimeCronManager);
+  } else {
+    logger.info('[Reliability] 当前 scheduler 非 CronScheduler，跳过 runtime cron manager 注入');
+    setRuntimeCronManager(null);
+  }
+
+  const cleanupOrphanCronJobs = async (): Promise<void> => {
+    if (!runtimeCronManager || !reliabilityConfig.cronOrphanAutoCleanup) {
+      return;
+    }
+
+    const cleanup = await scanAndCleanupOrphanRuntimeCronJobs(runtimeCronManager, {
+      hasConversationBinding: (platform, conversationId, sessionId) => {
+        const binding = chatSessionStore.getSessionByConversation(platform, conversationId);
+        if (!binding) {
+          return false;
+        }
+        return !sessionId || binding.sessionId === sessionId;
+      },
+      getSessionStatus: async (sessionId, directory) => {
+        try {
+          const session = await opencodeClient.getSessionById(
+            sessionId,
+            directory ? { directory } : undefined
+          );
+          return session ? 'exists' : 'missing';
+        } catch {
+          return 'unknown';
+        }
+      },
+    });
+
+    if (cleanup.removedJobIds.length > 0) {
+      logger.info(`[RuntimeCron] orphan cleanup removed ${cleanup.removedJobIds.length} job(s)`);
+    }
+  };
+
+  const proactiveHeartbeatRunner = createProactiveHeartbeatRunner({
+    enabled: reliabilityConfig.proactiveHeartbeatEnabled,
+    intervalMs: reliabilityConfig.heartbeatIntervalMs,
+    prompt: reliabilityConfig.heartbeatPrompt || '',
+    agent: reliabilityConfig.heartbeatAgent,
+    client: {
+      createSession: async (title?: string, directory?: string) => {
+        const created = await opencodeClient.createSession(title, directory);
+        return { id: created.id };
+      },
+      getSessionById: async (sessionId: string, options?: { directory?: string }) => {
+        return await opencodeClient.getSessionById(sessionId, options);
+      },
+      sendMessage: async (
+        sessionId: string,
+        text: string,
+        options?: {
+          agent?: string;
+          directory?: string;
+          providerId?: string;
+          modelId?: string;
+          variant?: string;
+        }
+      ) => {
+        const response = await opencodeClient.sendMessage(sessionId, text, options);
+        return { parts: response.parts as unknown[] };
+      },
+    },
+    notifyAlert: async (alertText: string) => {
+      if (reliabilityConfig.heartbeatAlertChats.length === 0) {
+        return;
+      }
+
+      const sender = feishuAdapter.getSender();
+      for (const chatId of reliabilityConfig.heartbeatAlertChats) {
+        try {
+          await sender.sendText(chatId, `⚠️ [Heartbeat Alert]\n${alertText}`);
+        } catch (error) {
+          logger.error(`[Heartbeat] 发送告警失败 chat=${chatId}:`, error);
+        }
+      }
+    },
+    logger: {
+      info: message => {
+        logger.info(message);
+      },
+      warn: message => {
+        logger.info(message);
+      },
+      error: (...args: unknown[]) => {
+        logger.error(...args);
+      },
+    },
+  });
+
+  let cronApiServer: { start: () => Promise<void>; stop: () => Promise<void> } | null = null;
+  if (reliabilityConfig.cronApiEnabled && runtimeCronManager) {
+    cronApiServer = createCronApiServer(runtimeCronManager, {
+      host: reliabilityConfig.cronApiHost,
+      port: reliabilityConfig.cronApiPort,
+      token: reliabilityConfig.cronApiToken,
+      logger: {
+        info: message => {
+          logger.info(message);
+        },
+        warn: message => {
+          logger.info(message);
+        },
+        error: (...args: unknown[]) => {
+          logger.error(...args);
+        },
+      },
+    });
+    void cronApiServer.start().catch(error => {
+      logger.error('[RuntimeCronAPI] 启动失败:', error);
+    });
+  }
+
+  if (reliabilityConfig.cronEnabled) {
+    void cleanupOrphanCronJobs().catch(error => {
+      logger.error('[RuntimeCron] startup orphan cleanup failed:', error);
+    });
+    scheduler.start();
+  }
+  proactiveHeartbeatRunner.start();
+  logger.info('[Reliability] bootstrap 完成（heartbeat + scheduler + rescue orchestrator）');
+
+  let cleaned = false;
+
+  return {
+    onInboundMessage: async () => {
+      if (!shouldUseInboundHeartbeat) {
+        return;
+      }
+      try {
+        await heartbeatEngine.onInboundMessage();
+      } catch (error) {
+        logger.error('[Heartbeat] 入站触发执行失败:', error);
+      }
+    },
+    cleanup: async () => {
+      if (cleaned) {
+        return;
+      }
+      cleaned = true;
+      await Promise.all([
+        scheduler.stop(),
+        Promise.resolve(rescueOrchestrator.cleanup()),
+        Promise.resolve(proactiveHeartbeatRunner.stop()),
+        cronApiServer ? cronApiServer.stop() : Promise.resolve(),
+      ]);
+      setRuntimeCronManager(null);
+      logger.info('[Reliability] cleanup 完成');
+    },
+  };
+};
+
 async function main() {
 
   console.log('╔════════════════════════════════════════════════╗');
-  console.log('║   飞书 × OpenCode 桥接服务 v2.8.3 (Group)  ║');
+console.log('║   飞书 × OpenCode 桥接服务 v2.9.0-beta (Group)  ║');
   console.log('╚════════════════════════════════════════════════╝');
 
   // 1. 验证配置
@@ -1255,8 +1719,12 @@ async function main() {
     }
   });
 
+  // 3.5 初始化 Reliability 生命周期（heartbeat + scheduler + rescue orchestrator）
+  const reliabilityLifecycle = bootstrapReliabilityLifecycle();
+
   // 4. 监听飞书消息（通过路由器分发）
   feishuClient.on('message', async (event) => {
+    await reliabilityLifecycle.onInboundMessage();
     await rootRouter.onMessage(event);
   });
 
@@ -1362,6 +1830,9 @@ async function main() {
 
   feishuClient.onChatDisbanded(async (chatId) => {
     console.log(`[Index] 群 ${chatId} 已解散`);
+    if (reliabilityConfig.cronOrphanAutoCleanup) {
+      cleanupRuntimeCronJobsByConversation(getRuntimeCronManager(), 'feishu', chatId);
+    }
     chatSessionStore.removeSession(chatId);
   });
   
@@ -1397,8 +1868,21 @@ async function main() {
   console.log('✅ 服务已就绪');
   
   // 优雅退出处理
-  const gracefulShutdown = (signal: string) => {
+  let shuttingDown = false;
+  const gracefulShutdown = async (signal: string) => {
+    if (shuttingDown) {
+      return;
+    }
+    shuttingDown = true;
+
     console.log(`\n[${signal}] 正在关闭服务...`);
+
+    // 停止 reliability 调度和救援资源
+    try {
+      await reliabilityLifecycle.cleanup();
+    } catch (e) {
+      console.error('停止 reliability 资源失败:', e);
+    }
 
     // 停止 Discord 适配器
     try {
@@ -1437,12 +1921,20 @@ async function main() {
     }, 500);
   };
 
-  process.on('SIGINT', () => gracefulShutdown('SIGINT'));
-  process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
-  process.on('SIGUSR2', () => gracefulShutdown('SIGUSR2')); // nodemon 重启信号
+  process.on('SIGINT', () => {
+    void gracefulShutdown('SIGINT');
+  });
+  process.on('SIGTERM', () => {
+    void gracefulShutdown('SIGTERM');
+  });
+  process.on('SIGUSR2', () => {
+    void gracefulShutdown('SIGUSR2');
+  }); // nodemon 重启信号
 }
 
-main().catch(error => {
-  console.error('Fatal Error:', error);
-  process.exit(1);
-});
+if (process.env.VITEST !== 'true') {
+  main().catch(error => {
+    console.error('Fatal Error:', error);
+    process.exit(1);
+  });
+}

@@ -1,4 +1,40 @@
-import 'dotenv/config';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import dotenv from 'dotenv';
+
+const explicitEnvFile = process.env.OPENCODE_BRIDGE_ENV_FILE?.trim();
+const explicitConfigDir = process.env.OPENCODE_BRIDGE_CONFIG_DIR?.trim();
+const cwdEnvFile = path.join(process.cwd(), '.env');
+const defaultConfigDir = path.join(os.homedir(), '.config', 'opencode-bridge');
+const defaultEnvFile = path.join(defaultConfigDir, '.env');
+
+const resolvedEnvFile = (() => {
+  if (explicitEnvFile) {
+    const envFile = path.resolve(explicitEnvFile);
+    return fs.existsSync(envFile) ? envFile : undefined;
+  }
+
+  if (explicitConfigDir) {
+    const envFile = path.join(path.resolve(explicitConfigDir), '.env');
+    return fs.existsSync(envFile) ? envFile : undefined;
+  }
+
+  if (fs.existsSync(cwdEnvFile)) {
+    return cwdEnvFile;
+  }
+
+  if (fs.existsSync(defaultEnvFile)) {
+    return defaultEnvFile;
+  }
+
+  return undefined;
+})();
+
+if (resolvedEnvFile) {
+  dotenv.config({ path: resolvedEnvFile });
+  process.env.OPENCODE_BRIDGE_ACTIVE_ENV_FILE ??= resolvedEnvFile;
+}
 
 function parseBooleanEnv(value: string | undefined, fallback: boolean): boolean {
   const normalized = normalizeBooleanToken(value);
@@ -252,6 +288,98 @@ export const directoryConfig = {
   get isAllowlistEnforced() {
     return this.allowedDirectories.length > 0;
   },
+};
+
+// 可靠性配置
+export const reliabilityConfig = {
+  // 是否启用可靠性 Cron 调度
+  cronEnabled: parseBooleanEnv(process.env.RELIABILITY_CRON_ENABLED, true),
+
+  // 是否启用运行时 Cron API
+  cronApiEnabled: parseBooleanEnv(process.env.RELIABILITY_CRON_API_ENABLED, false),
+
+  // Cron API 监听地址
+  cronApiHost: process.env.RELIABILITY_CRON_API_HOST?.trim() || '127.0.0.1',
+
+  // Cron API 监听端口
+  cronApiPort: (() => {
+    const parsed = parseNonNegativeIntEnv(process.env.RELIABILITY_CRON_API_PORT, -1);
+    return parsed > 0 ? parsed : 4097;
+  })(),
+
+  // Cron API Bearer Token（可选）
+  cronApiToken: process.env.RELIABILITY_CRON_API_TOKEN?.trim() || undefined,
+
+  // 运行时 Cron 任务持久化文件（可选，默认 ~/cron/jobs.json）
+  cronJobsFile: process.env.RELIABILITY_CRON_JOBS_FILE?.trim() || undefined,
+
+  cronOrphanAutoCleanup: parseBooleanEnv(process.env.RELIABILITY_CRON_ORPHAN_AUTO_CLEANUP, false),
+
+  cronForwardToPrivateChat: parseBooleanEnv(process.env.RELIABILITY_CRON_FORWARD_TO_PRIVATE, false),
+
+  cronFallbackFeishuChatId: process.env.RELIABILITY_CRON_FALLBACK_FEISHU_CHAT_ID?.trim() || undefined,
+
+  cronFallbackDiscordConversationId: process.env.RELIABILITY_CRON_FALLBACK_DISCORD_CONVERSATION_ID?.trim() || undefined,
+
+  // 是否启用主动心跳（Bridge 定时器触发）
+  proactiveHeartbeatEnabled: parseBooleanEnv(process.env.RELIABILITY_PROACTIVE_HEARTBEAT_ENABLED, false),
+
+  // 是否启用入站消息触发心跳（兼容模式）
+  inboundHeartbeatEnabled: parseBooleanEnv(process.env.RELIABILITY_INBOUND_HEARTBEAT_ENABLED, false),
+
+  // 心跳间隔 (毫秒)，默认 30 分钟
+  heartbeatIntervalMs: (() => {
+    const parsed = parseNonNegativeIntEnv(process.env.RELIABILITY_HEARTBEAT_INTERVAL_MS, -1);
+    return parsed > 0 ? parsed : 1800000;
+  })(),
+
+  // 主动心跳使用的 agent（可选）
+  heartbeatAgent: process.env.RELIABILITY_HEARTBEAT_AGENT?.trim() || undefined,
+
+  // 主动心跳提示词（可选）
+  heartbeatPrompt: process.env.RELIABILITY_HEARTBEAT_PROMPT?.trim() || undefined,
+
+  // 主动心跳告警推送目标（飞书 chat_id，逗号分隔）
+  heartbeatAlertChats: (process.env.RELIABILITY_HEARTBEAT_ALERT_CHATS || '')
+    .split(',')
+    .map(item => item.trim())
+    .filter(item => item.length > 0),
+
+  // 失败阈值，默认 3
+  failureThreshold: (() => {
+    const parsed = parseNonNegativeIntEnv(process.env.RELIABILITY_FAILURE_THRESHOLD, -1);
+    return parsed > 0 ? parsed : 3;
+  })(),
+
+  // 窗口大小 (毫秒)，默认 90 秒
+  windowMs: (() => {
+    const parsed = parseNonNegativeIntEnv(process.env.RELIABILITY_WINDOW_MS, -1);
+    return parsed > 0 ? parsed : 90000;
+  })(),
+
+  // 冷却窗口 (毫秒)，默认 5 分钟
+  cooldownMs: (() => {
+    const parsed = parseNonNegativeIntEnv(process.env.RELIABILITY_COOLDOWN_MS, -1);
+    return parsed > 0 ? parsed : 300000;
+  })(),
+
+  // 修复预算，默认 3
+  repairBudget: (() => {
+    const parsed = parseNonNegativeIntEnv(process.env.RELIABILITY_REPAIR_BUDGET, -1);
+    return parsed > 0 ? parsed : 3;
+  })(),
+
+  // 模式：observe | shadow | active，默认 observe
+  mode: (() => {
+    const value = process.env.RELIABILITY_MODE?.trim().toLowerCase();
+    if (value === 'observe' || value === 'shadow' || value === 'active') {
+      return value as 'observe' | 'shadow' | 'active';
+    }
+    return 'observe';
+  })(),
+
+  // 仅本地自动救援，默认 true
+  loopbackOnly: parseBooleanEnv(process.env.RELIABILITY_LOOPBACK_ONLY, true),
 };
 
 // 验证配置
