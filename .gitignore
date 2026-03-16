@@ -37,3 +37,4 @@ temp/
 
 # Sisyphus AI 代理工作目录
 .sisyphus/
+memory/
