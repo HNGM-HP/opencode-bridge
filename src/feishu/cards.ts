@@ -5,6 +5,8 @@ export interface PermissionCardData {
   risk?: string;
   sessionId: string;
   permissionId: string;
+  parentSessionId?: string;
+  relatedSessionId?: string;
 }
 
 export function buildPermissionCard(data: PermissionCardData): object {
@@ -62,6 +64,8 @@ export function buildPermissionCard(data: PermissionCardData): object {
               sessionId: data.sessionId,
               permissionId: data.permissionId,
               remember: false,
+              ...(data.parentSessionId ? { parentSessionId: data.parentSessionId } : {}),
+              ...(data.relatedSessionId ? { relatedSessionId: data.relatedSessionId } : {}),
             },
           },
           {
@@ -75,6 +79,8 @@ export function buildPermissionCard(data: PermissionCardData): object {
               action: 'permission_deny',
               sessionId: data.sessionId,
               permissionId: data.permissionId,
+              ...(data.parentSessionId ? { parentSessionId: data.parentSessionId } : {}),
+              ...(data.relatedSessionId ? { relatedSessionId: data.relatedSessionId } : {}),
             },
           },
           {
@@ -89,6 +95,8 @@ export function buildPermissionCard(data: PermissionCardData): object {
               sessionId: data.sessionId,
               permissionId: data.permissionId,
               remember: true,
+              ...(data.parentSessionId ? { parentSessionId: data.parentSessionId } : {}),
+              ...(data.relatedSessionId ? { relatedSessionId: data.relatedSessionId } : {}),
             },
           },
         ],

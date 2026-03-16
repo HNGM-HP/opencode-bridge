@@ -295,6 +295,8 @@ export class OpenCodeEventHub {
         description: permissionInfo.description,
         risk: permissionInfo.risk,
         userId: '',
+        parentSessionId: event.parentSessionId,
+        relatedSessionId: event.relatedSessionId,
       });
       console.log(
         `[权限] 已入队: chat=${route.permissionChatKey}, permission=${event.permissionId}, pending=${permissionHandler.getQueueSizeForChat(route.permissionChatKey)}`
@@ -685,16 +687,6 @@ export class OpenCodeEventHub {
           return;
         }
         outputBuffer.append(bufferKey, delta);
-        return;
-      }
-
-      if (part?.type === 'reasoning') {
-        appendReasoningFromPart(sessionID as string, part as { id?: unknown; text?: unknown }, bufferKey);
-        return;
-      }
-
-      if (part?.type === 'text') {
-        appendTextFromPart(sessionID as string, part as { id?: unknown; text?: unknown }, bufferKey);
         return;
       }
     }

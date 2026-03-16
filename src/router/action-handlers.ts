@@ -155,6 +155,16 @@ export function createPermissionActionCallbacks(
       };
     }
 
+    // 收集候选 session IDs（包括父会话和相关会话）
+    const parentSessionId = toTrimmedString(actionValue.parentSessionId);
+    const relatedSessionId = toTrimmedString(actionValue.relatedSessionId);
+    const candidateSessionIds = Array.from(
+      new Set(
+        [sessionId, parentSessionId, relatedSessionId]
+          .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+      )
+    );
+
     const allow = action === 'permission_allow';
     const rememberRaw = typeof actionValue.remember === 'string'
       ? actionValue.remember.normalize('NFKC').trim().toLowerCase()
@@ -167,17 +177,34 @@ export function createPermissionActionCallbacks(
       rememberRaw === 'always' ||
       rememberRaw === '始终允许';
 
-    const permissionDirectoryOptions = resolvePermissionDirectoryOptions(sessionId);
-    const responded = await opencodeClient.respondToPermission(
-      sessionId,
-      permissionId,
-      allow,
-      remember,
-      permissionDirectoryOptions
-    );
+    // 尝试每个候选 session，直到成功
+    let responded = false;
+    let respondedSessionId = sessionId;
+    let lastError: unknown;
+
+    for (const candidateSessionId of candidateSessionIds) {
+      const permissionDirectoryOptions = resolvePermissionDirectoryOptions(candidateSessionId);
+      try {
+        const ok = await opencodeClient.respondToPermission(
+          candidateSessionId,
+          permissionId,
+          allow,
+          remember,
+          permissionDirectoryOptions
+        );
+        if (ok) {
+          responded = true;
+          respondedSessionId = candidateSessionId;
+          break;
+        }
+      } catch (error) {
+        lastError = error;
+        console.error(`[权限] 响应失败: session=${candidateSessionId}, permission=${permissionId}`, error);
+      }
+    }
 
     if (!responded) {
-      console.error(`[权限] 响应失败: session=${sessionId}, permission=${permissionId}`);
+      console.error(`[权限] 所有候选 session 响应失败: sessions=${candidateSessionIds.join(',')}, permission=${permissionId}`, lastError);
       return {
         toast: {
           type: 'error',
@@ -188,10 +215,10 @@ export function createPermissionActionCallbacks(
     }
 
     console.log(
-      `[权限] 卡片响应成功: session=${sessionId}, permission=${permissionId}, allow=${allow}, remember=${remember}`
+      `[权限] 卡片响应成功: session=${respondedSessionId}, permission=${permissionId}, allow=${allow}, remember=${remember}`
     );
 
-    const permissionChatId = chatSessionStore.getChatId(sessionId);
+    const permissionChatId = chatSessionStore.getChatId(respondedSessionId);
     if (permissionChatId) {
       const bufferKey = `chat:${permissionChatId}`;
       const removed = permissionHandler.resolveForChat(permissionChatId, permissionId);
@@ -201,7 +228,7 @@ export function createPermissionActionCallbacks(
           : `❌ 已拒绝权限：${removed.tool}`;
         upsertTimelineNote(
           bufferKey,
-          `permission-result:${sessionId}:${permissionId}:${allow ? 'allow' : 'deny'}:${remember ? 'always' : 'once'}`,
+          `permission-result:${respondedSessionId}:${permissionId}:${allow ? 'allow' : 'deny'}:${remember ? 'always' : 'once'}`,
           resolvedText,
           'permission'
         );
@@ -235,29 +262,54 @@ export function createPermissionActionCallbacks(
       return true;
     }
 
-    const permissionDirectoryOptions = resolvePermissionDirectoryOptions(pending.sessionId, event.chatId);
-    const responded = await opencodeClient.respondToPermission(
-      pending.sessionId,
-      pending.permissionId,
-      decision.allow,
-      decision.remember,
-      permissionDirectoryOptions
+    // 收集候选 session IDs（包括父会话和相关会话）
+    const candidateSessionIds = Array.from(
+      new Set(
+        [pending.sessionId, pending.parentSessionId, pending.relatedSessionId]
+          .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+      )
     );
 
+    // 尝试每个候选 session，直到成功
+    let responded = false;
+    let respondedSessionId = pending.sessionId;
+    let lastError: unknown;
+
+    for (const candidateSessionId of candidateSessionIds) {
+      const permissionDirectoryOptions = resolvePermissionDirectoryOptions(candidateSessionId, event.chatId);
+      try {
+        const ok = await opencodeClient.respondToPermission(
+          candidateSessionId,
+          pending.permissionId,
+          decision.allow,
+          decision.remember,
+          permissionDirectoryOptions
+        );
+        if (ok) {
+          responded = true;
+          respondedSessionId = candidateSessionId;
+          break;
+        }
+      } catch (error) {
+        lastError = error;
+        console.error(`[权限] 文本响应失败: session=${candidateSessionId}, permission=${pending.permissionId}`, error);
+      }
+    }
+
     if (!responded) {
-      console.error(`[权限] 文本响应失败: chat=${event.chatId}`);
+      console.error(`[权限] 所有候选 session 文本响应失败: chat=${event.chatId}, sessions=${candidateSessionIds.join(',')}`, lastError);
       await feishuClient.reply(event.messageId, '权限响应失败，请重试');
       return true;
     }
 
     console.log(
-      `[权限] 文本响应成功: chat=${event.chatId}, session=${pending.sessionId}, permission=${pending.permissionId}, allow=${decision.allow}, remember=${decision.remember}`
+      `[权限] 文本响应成功: chat=${event.chatId}, session=${respondedSessionId}, permission=${pending.permissionId}, allow=${decision.allow}, remember=${decision.remember}`
     );
 
     const removed = permissionHandler.resolveForChat(event.chatId, pending.permissionId);
     const bufferKey = `chat:${event.chatId}`;
     if (!outputBuffer.get(bufferKey)) {
-      outputBuffer.getOrCreate(bufferKey, event.chatId, pending.sessionId, event.messageId);
+      outputBuffer.getOrCreate(bufferKey, event.chatId, respondedSessionId, event.messageId);
     }
 
     const toolName = removed?.tool || pending.tool || '工具';
@@ -267,7 +319,7 @@ export function createPermissionActionCallbacks(
 
     upsertTimelineNote(
       bufferKey,
-      `permission-result-text:${pending.sessionId}:${pending.permissionId}:${decision.allow ? 'allow' : 'deny'}:${decision.remember ? 'always' : 'once'}`,
+      `permission-result-text:${respondedSessionId}:${pending.permissionId}:${decision.allow ? 'allow' : 'deny'}:${decision.remember ? 'always' : 'once'}`,
       resolvedText,
       'permission'
     );

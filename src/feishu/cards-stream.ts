@@ -37,6 +37,8 @@ export interface StreamCardPendingPermission {
   description: string;
   risk?: string;
   pendingCount?: number;
+  parentSessionId?: string;
+  relatedSessionId?: string;
 }
 
 export interface StreamCardQuestionOption {

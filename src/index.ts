@@ -591,6 +591,8 @@ console.log('║   飞书 × OpenCode 桥接服务 v2.9.0 (Group)  ║');
       description: head.description,
       risk: head.risk,
       pendingCount,
+      parentSessionId: head.parentSessionId,
+      relatedSessionId: head.relatedSessionId,
     };
   };
 
@@ -1122,9 +1124,12 @@ console.log('║   飞书 × OpenCode 桥接服务 v2.9.0 (Group)  ║');
           part.input,
           part.args,
           part.arguments,
+          part.raw,
+          part.rawInput,
           state?.input,
           state?.args,
-          state?.arguments
+          state?.arguments,
+          state?.raw
         )
       : undefined;
     const outputValue = status === 'failed'
@@ -1406,120 +1411,6 @@ console.log('║   飞书 × OpenCode 桥接服务 v2.9.0 (Group)  ║');
       cardData: { ...cardData },
       timestamp: Date.now(),
     });
-  };
-
-  type PermissionDecision = {
-    allow: boolean;
-    remember: boolean;
-  };
-
-  const parsePermissionDecision = (raw: string): PermissionDecision | null => {
-    const normalized = raw.normalize('NFKC').trim().toLowerCase();
-    if (!normalized) return null;
-
-    const compact = normalized
-      .replace(/[\s\u3000]+/g, '')
-      .replace(/[。！!,.，；;:：\-]/g, '');
-    const hasAlways =
-      compact.includes('始终') ||
-      compact.includes('永久') ||
-      compact.includes('always') ||
-      compact.includes('记住') ||
-      compact.includes('总是');
-
-    const containsAny = (words: string[]): boolean => {
-      return words.some(word => compact === word || compact.includes(word));
-    };
-
-    const isDeny =
-      compact === 'n' ||
-      compact === 'no' ||
-      compact === '否' ||
-      compact === '拒绝' ||
-      containsAny(['拒绝', '不同意', '不允许', 'deny']);
-    if (isDeny) {
-      return { allow: false, remember: false };
-    }
-
-    const isAllow =
-      compact === 'y' ||
-      compact === 'yes' ||
-      compact === 'ok' ||
-      compact === 'always' ||
-      compact === '允许' ||
-      compact === '始终允许' ||
-      containsAny(['允许', '同意', '通过', '批准', 'allow']);
-    if (isAllow) {
-      return { allow: true, remember: hasAlways };
-    }
-
-    return null;
-  };
-
-  const tryHandlePendingPermissionByText = async (event: FeishuMessageEvent): Promise<boolean> => {
-    if (event.chatType !== 'group') {
-      return false;
-    }
-
-    const trimmedContent = event.content.trim();
-    if (!trimmedContent || trimmedContent.startsWith('/')) {
-      return false;
-    }
-
-    const pending = permissionHandler.peekForChat(event.chatId);
-    if (!pending) {
-      return false;
-    }
-
-    const decision = parsePermissionDecision(trimmedContent);
-    if (!decision) {
-      await feishuClient.reply(
-        event.messageId,
-        '当前有待确认权限，请回复：允许 / 拒绝 / 始终允许（也支持 y / n / always）'
-      );
-      return true;
-    }
-
-    const responded = await opencodeClient.respondToPermission(
-      pending.sessionId,
-      pending.permissionId,
-      decision.allow,
-      decision.remember
-    );
-
-    if (!responded) {
-      console.error(
-        `[权限] 文本响应失败: chat=${event.chatId}, session=${pending.sessionId}, permission=${pending.permissionId}`
-      );
-      await feishuClient.reply(event.messageId, '权限响应失败，请重试');
-      return true;
-    }
-
-    const removed = permissionHandler.resolveForChat(event.chatId, pending.permissionId);
-    const bufferKey = `chat:${event.chatId}`;
-    if (!outputBuffer.get(bufferKey)) {
-      outputBuffer.getOrCreate(bufferKey, event.chatId, pending.sessionId, event.messageId);
-    }
-
-    const toolName = removed?.tool || pending.tool || '工具';
-    const resolvedText = decision.allow
-      ? decision.remember
-        ? `✅ 已允许并记住权限：${toolName}`
-        : `✅ 已允许权限：${toolName}`
-      : `❌ 已拒绝权限：${toolName}`;
-    upsertTimelineNote(
-      bufferKey,
-      `permission-result-text:${pending.sessionId}:${pending.permissionId}:${decision.allow ? 'allow' : 'deny'}:${decision.remember ? 'always' : 'once'}`,
-      resolvedText,
-      'permission'
-    );
-    outputBuffer.touch(bufferKey);
-
-    await feishuClient.reply(
-      event.messageId,
-      decision.allow ? (decision.remember ? '已允许并记住该权限' : '已允许该权限') : '已拒绝该权限'
-    );
-    return true;
   };
 
   outputBuffer.setUpdateCallback(async (buffer) => {

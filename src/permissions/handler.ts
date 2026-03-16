@@ -11,6 +11,8 @@ export interface PendingPermission {
   userId: string;
   createdAt: number;
   cardMessageId?: string;
+  parentSessionId?: string;
+  relatedSessionId?: string;
 }
 
 class PermissionHandler {
@@ -75,6 +77,8 @@ class PermissionHandler {
       risk?: string;
       userId?: string;
       cardMessageId?: string;
+      parentSessionId?: string;
+      relatedSessionId?: string;
     }
   ): PendingPermission {
     const queue = this.pendingByChat.get(chatId) || [];
@@ -88,6 +92,8 @@ class PermissionHandler {
       userId: data.userId || '',
       createdAt: Date.now(),
       cardMessageId: data.cardMessageId,
+      parentSessionId: data.parentSessionId,
+      relatedSessionId: data.relatedSessionId,
     };
 
     const index = queue.findIndex(item => item.permissionId === data.permissionId);
@@ -148,6 +154,8 @@ class PermissionHandler {
       risk: data.risk,
       userId: data.userId,
       cardMessageId: data.cardMessageId,
+      parentSessionId: data.parentSessionId,
+      relatedSessionId: data.relatedSessionId,
     });
   }
 
