@@ -42,6 +42,9 @@ memory/
 # Claude Code 配置
 .claude/
 
+# CodePilot uploads
+.codepilot-uploads/
+
 # 临时文档
 HEARTBEAT.md
 PLAN.md
