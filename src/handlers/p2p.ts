@@ -503,29 +503,63 @@ private getSessionOptionLabel(session: OpencodeSession, highlightWorkspace: bool
       console.warn(`[P2P] 用户 ${openId} 在创建群时被标记为无效，尝试手动拉取...`);
     }
 
-    let members = await feishuClient.getChatMembers(chatId);
-    if (members.includes(openId)) {
-      return { ok: true };
-    }
+    // 重试机制：飞书 createChat API 的成员添加可能是异步的，需要等待同步完成
+    const maxRetries = 3;
+    const retryDelayMs = 500;
+    
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      let members = await feishuClient.getChatMembers(chatId);
+      if (members.includes(openId)) {
+        if (attempt > 0) {
+          console.log(`[P2P] 重试 ${attempt + 1}/${maxRetries} 次后确认用户 ${openId} 在群 ${chatId} 中`);
+        }
+        return { ok: true };
+      }
 
-    console.warn(`[P2P] 用户 ${openId} 未在新建群 ${chatId} 中，尝试手动拉取...`);
-    const added = await feishuClient.addChatMembers(chatId, [openId]);
-    if (!added) {
-      return {
-        ok: false,
-        message: '❌ 无法将您添加到群聊。请确保机器人具有"获取群组信息"和"更新群组信息"权限，且您在机器人的可见范围内。',
-      };
-    }
+      // 如果是首次检查，且创建时被标记为无效，直接尝试手动拉取
+      if (attempt === 0 && userInvalidOnCreate) {
+        console.warn(`[P2P] 用户 ${openId} 未在新建群 ${chatId} 中，尝试手动拉取...`);
+        const added = await feishuClient.addChatMembers(chatId, [openId]);
+        if (!added) {
+          return {
+            ok: false,
+            message: '❌ 无法将您添加到群聊。请确保机器人具有"获取群组信息"和"更新群组信息"权限，且您在机器人的可见范围内。',
+          };
+        }
+        // 拉取成功后继续检查
+      }
 
-    members = await feishuClient.getChatMembers(chatId);
-    if (!members.includes(openId)) {
+      // 如果不是最后一次重试，等待后重试
+      if (attempt < maxRetries - 1) {
+        console.warn(`[P2P] 用户 ${openId} 尚未在群 ${chatId} 中，等待 ${retryDelayMs}ms 后重试 (${attempt + 1}/${maxRetries})...`);
+        await new Promise(resolve => setTimeout(resolve, retryDelayMs));
+        continue;
+      }
+
+      // 最后一次重试仍然失败，尝试手动拉取作为兜底
+      console.warn(`[P2P] 重试 ${maxRetries} 次后用户 ${openId} 仍不在群 ${chatId} 中，最后一次尝试手动拉取...`);
+      const added = await feishuClient.addChatMembers(chatId, [openId]);
+      if (!added) {
+        return {
+          ok: false,
+          message: '❌ 无法将您添加到群聊。请确保机器人具有"获取群组信息"和"更新群组信息"权限，且您在机器人的可见范围内。',
+        };
+      }
+
+      // 手动拉取后再次检查
+      members = await feishuClient.getChatMembers(chatId);
+      if (members.includes(openId)) {
+        return { ok: true };
+      }
+
       return {
         ok: false,
         message: '❌ 创建群聊异常：无法确认成员状态，已自动清理无效群。',
       };
     }
 
-    return { ok: true };
+    // 理论上不会到达这里
+    return { ok: false, message: '❌ 未知错误' };
   }
 
   private async findSessionById(sessionId: string): Promise<OpencodeSession | null> {
@@ -791,7 +825,16 @@ private getSessionOptionLabel(session: OpencodeSession, highlightWorkspace: bool
       this.clearCreateChatProjectSelection(chatId, messageId, openId);
       this.clearCreateChatDirectoryInput(chatId, messageId, openId);
       this.clearCreateChatNameInput(chatId, messageId, openId);
-      await this.createGroupWithSessionSelection(openId, selectedSessionId, chatId, messageId, rawDirectory, customChatName);
+      
+      // 🔧 异步执行建群逻辑，避免飞书回调超时（限制 3 秒）
+      // 后台执行，不阻塞响应
+      setImmediate(() => {
+        this.createGroupWithSessionSelection(openId, selectedSessionId, chatId, messageId, rawDirectory, customChatName)
+          .catch(error => {
+            console.error('[P2P] 后台建群失败:', error);
+          });
+      });
+      
       return;
     }
   }

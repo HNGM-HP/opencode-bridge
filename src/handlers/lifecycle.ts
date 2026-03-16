@@ -46,6 +46,18 @@ export class LifecycleHandler {
     } else {
       for (const mappedChatId of feishuChatIds) {
         if (activeChatIdSet.has(mappedChatId)) continue;
+        
+        // 新增：跳过最近创建的群聊（保护窗口 30 秒），避免飞书 API 同步延迟导致误删
+        const session = chatSessionStore.getSession(mappedChatId);
+        if (session && session.createdAt) {
+          const ageMs = Date.now() - session.createdAt;
+          const protectionWindowMs = 30 * 1000;
+          if (ageMs < protectionWindowMs) {
+            console.log('[Lifecycle] 跳过新创建群聊（保护窗口内）: chat=' + mappedChatId);
+            continue;
+          }
+        }
+        
         if (!chatSessionStore.isGroupChatSession(mappedChatId)) {
           continue;
         }
