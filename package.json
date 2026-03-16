@@ -27,7 +27,7 @@
     "build": "tsc",
     "test": "vitest run",
     "test:watch": "vitest",
-    "start": "node dist/index.js",
+    "start": "node scripts/start.mjs",
     "pack:check": "npm pack --dry-run",
     "prepublishOnly": "npm run build",
     "deploy:bridge": "node scripts/deploy.mjs deploy",
