@@ -256,12 +256,17 @@ flowchart TB
 Linux/macOS：
 
 ```bash
+git clone https://github.com/HNGM-HP/opencode-bridge.git
+cd opencode-bridge
+chmod +x ./scripts/deploy.sh
 ./scripts/deploy.sh guide
 ```
 
 Windows PowerShell：
 
 ```powershell
+git clone https://github.com/HNGM-HP/opencode-bridge.git
+cd opencode-bridge
 .\scripts\deploy.ps1 guide
 ```
 
