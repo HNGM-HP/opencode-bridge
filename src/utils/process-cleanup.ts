@@ -9,7 +9,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const rootDir = path.resolve(__dirname, '..');
+// 从 dist/utils/ 返回到项目根目录
+const rootDir = path.resolve(__dirname, '..', '..');
 const processManagerPath = path.join(rootDir, 'scripts', 'process-manager.mjs');
 
 /**

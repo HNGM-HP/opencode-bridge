@@ -269,14 +269,9 @@ function waitForExit(getProcesses, maxWaitMs = 10000) {
 }
 
 function sleep(ms) {
-  const Atomics = require('node:buffer').Atomics;
-  if (Atomics && typeof Atomics.wait === 'function') {
-    const sab = new SharedArrayBuffer(4);
-    const i32 = new Int32Array(sab);
-    Atomics.wait(i32, 0, 0, ms);
-  } else {
-    // 降级方案：使用 child_process 实现 sleep
-    spawnSync('node', ['-e', `require('node:timers').sleep(${ms})`]);
+  const end = Date.now() + ms;
+  while (Date.now() < end) {
+    // 忙等待
   }
 }
 
@@ -316,19 +311,21 @@ function main() {
         console.log(`[process-manager] 已终止 PID=${pid}`);
       }
 
-      // 等待进程退出
-      if (!waitForExit(() => findBridgeProcesses(excludeSelf), 10000)) {
-        const stillRemaining = findBridgeProcesses(excludeSelf);
-        if (stillRemaining.length > 0) {
-          console.log(`[process-manager] 警告：${stillRemaining.length} 个进程未响应 SIGTERM，尝试强制终止...`);
-          const forceResult = stopProcesses(stillRemaining, true);
-          for (const pid of forceResult.success) {
-            console.log(`[process-manager] 已强制终止 PID=${pid}`);
-          }
+      // 简单等待 2 秒让进程退出
+      sleep(2000);
+
+      // 检查是否有残留进程，强制终止
+      const stillRemaining = findBridgeProcesses(excludeSelf);
+      if (stillRemaining.length > 0) {
+        console.log(`[process-manager] 警告：${stillRemaining.length} 个进程未响应 SIGTERM，尝试强制终止...`);
+        const forceResult = stopProcesses(stillRemaining, true);
+        for (const pid of forceResult.success) {
+          console.log(`[process-manager] 已强制终止 PID=${pid}`);
         }
-      } else {
-        console.log('[process-manager] 所有 Bridge 进程已退出');
+        sleep(1000);
       }
+
+      console.log('[process-manager] Bridge 进程清理完成');
       break;
     }
 
@@ -347,18 +344,21 @@ function main() {
         console.log(`[process-manager] 已终止 PID=${pid}`);
       }
 
-      if (!waitForExit(() => findOpenCodeProcesses(excludeSelf), 10000)) {
-        const stillRemaining = findOpenCodeProcesses(excludeSelf);
-        if (stillRemaining.length > 0) {
-          console.log(`[process-manager] 警告：${stillRemaining.length} 个进程未响应 SIGTERM，尝试强制终止...`);
-          const forceResult = stopProcesses(stillRemaining, true);
-          for (const pid of forceResult.success) {
-            console.log(`[process-manager] 已强制终止 PID=${pid}`);
-          }
+      // 简单等待 2 秒让进程退出
+      sleep(2000);
+
+      // 检查是否有残留进程，强制终止
+      const stillRemaining = findOpenCodeProcesses(excludeSelf);
+      if (stillRemaining.length > 0) {
+        console.log(`[process-manager] 警告：${stillRemaining.length} 个进程未响应 SIGTERM，尝试强制终止...`);
+        const forceResult = stopProcesses(stillRemaining, true);
+        for (const pid of forceResult.success) {
+          console.log(`[process-manager] 已强制终止 PID=${pid}`);
         }
-      } else {
-        console.log('[process-manager] 所有 OpenCode 进程已退出');
+        sleep(1000);
       }
+
+      console.log('[process-manager] OpenCode 进程清理完成');
       break;
     }
 

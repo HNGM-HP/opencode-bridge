@@ -498,20 +498,15 @@ async function main() {
   console.log('║   飞书 × OpenCode 桥接服务 v2.9.1-beta ║');
   console.log('╚════════════════════════════════════════════════╝');
 
-  // 1. 清理旧的 Bridge 进程（防止重复启动）
-  try {
-    const { cleanupStaleProcesses } = await import('./utils/process-cleanup.js');
-    await cleanupStaleProcesses();
-  } catch (error) {
-    console.warn('[Index] 清理旧进程失败:', error);
-  }
-
-  // 2. 如果启用了 OpenCode 自动启动，先清理旧进程并启动
+  // 1. 如果启用了 OpenCode 自动启动，先清理旧进程并启动
   let opencodeChildProcess: import('node:child_process').ChildProcess | undefined;
   if (opencodeConfig.autoStart) {
     try {
       const { cleanupOpenCodeProcesses } = await import('./utils/process-cleanup.js');
       await cleanupOpenCodeProcesses();
+
+      // 等待 3 秒确保 OpenCode 进程完全退出
+      await new Promise(resolve => setTimeout(resolve, 3000));
 
       const { spawn } = await import('node:child_process');
       opencodeChildProcess = spawn(opencodeConfig.autoStartCmd, [], {

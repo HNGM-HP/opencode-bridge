@@ -125,16 +125,37 @@ function startBridge() {
   console.log(`[start] 日志文件：${outLog}`);
 }
 
+function sleep(ms) {
+  const end = Date.now() + ms;
+  while (Date.now() < end) {
+    // 忙等待
+  }
+}
+
 function main() {
   ensureLogDir();
 
-  // 调用进程管理工具清理旧进程（排除当前进程树）
+  // 1. 调用进程管理工具清理旧进程（不传递 --exclude-self，因为这是独立调用）
   console.log('[start] 清理旧进程...');
-  spawnSync(process.execPath, [processManagerPath, 'kill-bridge', '--exclude-self'], {
-    stdio: 'inherit',
+  const cleanupResult = spawnSync(process.execPath, [processManagerPath, 'kill-bridge'], {
+    stdio: 'pipe',
+    encoding: 'utf-8',
   });
 
+  if (cleanupResult.stdout) {
+    console.log(cleanupResult.stdout.trim());
+  }
+  if (cleanupResult.stderr) {
+    console.error(cleanupResult.stderr.trim());
+  }
+
+  // 2. 等待 3 秒，确保旧进程完全退出
+  console.log('[start] 等待进程退出...');
+  sleep(3000);
+
   ensureBuildIfMissing();
+
+  // 3. 启动 Bridge 服务
   startBridge();
 }
 
