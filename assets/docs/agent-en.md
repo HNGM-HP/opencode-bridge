@@ -10,16 +10,16 @@
 Supports creating and switching directly via natural language:
 
 ```text
-创建角色 名称=旅行助手; 描述=擅长制定旅行计划; 类型=主; 工具=webfetch; 提示词=先询问预算和时间，再给三套方案
+Create Role name=Travel Assistant; description=Expert at travel planning; type=primary; tools=webfetch; prompt=Ask budget and time first, then provide three options
 ```
 
 Also supports slash form:
 
 ```text
-/role create 名称=代码审查员; 描述=关注可维护性和安全; 类型=子; 工具=read,grep; 提示词=先列风险，再给最小改动建议
+/role create name=Code Reviewer; description=Focus on maintainability and security; type=subagent; tools=read,grep; prompt=List risks first, then give minimal change suggestions
 ```
 
-**Type** supports `主/子` (or `primary/subagent`).
+**Type** supports `primary/subagent`.
 
 ## 3) Configuring Agent (Reminder)
 

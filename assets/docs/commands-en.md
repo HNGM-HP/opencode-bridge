@@ -16,7 +16,7 @@
 | `/agent <name>` | Switch Agent |
 | `/agent off` | Disable Agent, return to default |
 | `/role create <spec>` | Create custom role in slash form |
-| `创建角色 名称=...; 描述=...; 类型=...; 工具=...` | Create custom role in natural language and switch |
+| `Create Role name=...; description=...; type=...; tools=...` | Create custom role in natural language and switch |
 | `/stop` | Interrupt current session execution |
 | `/undo` | Undo last interaction (OpenCode + Feishu sync) |
 | `/sessions` | List current project sessions (including unbound and local-only mapping records) |
@@ -30,13 +30,13 @@
 | `/project default set <path or alias>` | Set default working project for current group |
 | `/project default clear` | Clear current group default project |
 | `/session <sessionId>` | Manually bind existing OpenCode session (supports cross-workspace sessions created via Web; requires `ENABLE_MANUAL_SESSION_BIND` enabled) |
-| `新建会话窗口` | Natural language trigger to create new session (equivalent to `/session new`) |
+| `New Session Window` | Natural language trigger to create new session (equivalent to `/session new`) |
 | `/clear` | Equivalent to `/session new` |
 | `/clear free session` / `/clear_free_session` | Manually trigger a fallback scan with same rules as startup cleanup, and clean up zombie Cron |
 | `/clear free session <sessionId>` / `/clear_free_session <sessionId>` | Delete specified OpenCode session, remove all local binding mappings and Cron bound to that session |
 | `/compact` | Call OpenCode summarize to compress current session context |
 | `!<shell command>` | Passthrough whitelisted shell commands (e.g., `!ls`, `!pwd`, `!mkdir`, `!git status`) |
-| `/create_chat` / `/建群` | Bring up group creation card in private chat (click "Create Group" after dropdown selection to take effect) |
+| `/create_chat` / `/create-group` | Bring up group creation card in private chat (click "Create Group" after dropdown selection to take effect) |
 | `/send <absolute path>` | Send file from specified path to current group chat |
 | `/restart opencode` | Restart local OpenCode process (loopback only) |
 | `/status` | View current group binding status |
@@ -61,7 +61,7 @@ Recommended commands (prefer `///` prefix to avoid conflict with native Slash):
 | `///undo` | Undo last turn |
 | `///compact` / `///compat` | Compress context |
 | `///send <absolute path>` | Send whitelisted file to current channel |
-| `发送文件 <absolute path>` | Chinese natural language trigger to send whitelisted file |
+| `Send File <absolute path>` | Chinese natural language trigger to send whitelisted file |
 | `///restart opencode` | Restart local OpenCode process (loopback only) |
 | `///clear` | Delete and unbind current channel session |
 | `///create_chat` | Open dropdown session control panel (view status/new/bind/model/role/undo/compact) |

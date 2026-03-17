@@ -45,8 +45,8 @@ This project solves not "can it reply to messages" but "can cross-platform AI ta
 
 - User-friendly: permission confirmation, question answering, and session operations all happen within Feishu, without relying on local terminals.
 - Collaboration-friendly: supports binding existing sessions and migration binding, maintaining context across devices and groups.
-- Stability-friendly: session mapping persistence + dual-end undo + consistent cleanup rules avoid "surface normal, state错位".
-- Ops-friendly: built-in deployment, upgrade, status checks, and background management workflows suitable for continuous托管运行.
+- Stability-friendly: session mapping persistence + dual-end undo + consistent cleanup rules avoid "looks normal but state is misaligned".
+- Ops-friendly: built-in deployment, upgrade, status checks, and background management workflows suitable for continuous hosted operation.
 - Future-version friendly: compatible with OpenCode Server Basic Auth, ready for mandatory password enforcement.
 
 <a id="capabilities-overview"></a>
@@ -55,7 +55,7 @@ This project solves not "can it reply to messages" but "can cross-platform AI ta
 | Capability | What You Get | Related Commands/Config |
 |---|---|---|
 | Unified group/private routing | Single entry point for private and group chat, routed to correct session | Group @bot; private direct message |
-| Private chat session selection | Choose "new session / bind existing" when creating chat | `/create_chat`, `/建群` |
+| Private chat session selection | Choose "new session / bind existing" when creating chat | `/create_chat`, `/create-group` |
 | Manual session binding | Directly connect specified session to current group without interrupting context | `/session <sessionId>`, `ENABLE_MANUAL_SESSION_BIND` |
 | Migration binding & delete protection | Auto-migrate old group mappings and protect sessions from accidental deletion | Auto-enabled (manual binding scenarios) |
 | Lifecycle cleanup fallback | Startup cleanup and manual cleanup share same rules, reducing accidental cleanup | `/clear free session` |
@@ -67,7 +67,7 @@ This project solves not "can it reply to messages" but "can cross-platform AI ta
 | Context compression | Trigger session summarize within Feishu to free context window | `/compact` |
 | Shell command passthrough | Whitelisted `!` commands execute via OpenCode shell with echoed output | `!ls`, `!pwd`, `!git status` |
 | Server auth compatible | Supports OpenCode Server Basic Auth, ready for mandatory password default | `OPENCODE_SERVER_USERNAME`, `OPENCODE_SERVER_PASSWORD` |
-| File send to Feishu | AI can send files/screenshots from computer directly to current Feishu group | `/send`, `发送文件` |
+| File send to Feishu | AI can send files/screenshots from computer directly to current Feishu group | `/send`, `send-file` |
 | Working directory/project management | Specify working directory when creating session, with project aliases, group defaults, 9-stage security validation | `/project list`, `/session new <alias>`, `ALLOWED_DIRECTORIES` |
 | OpenCode local reliability governance | Runtime Cron (API/command/natural language) + local crash auto-rescue (with config backup/2-level fallback) + optional proactive heartbeat | `HEARTBEAT.md`, `RELIABILITY_*`, `logs/reliability-audit.jsonl` |
 | Deployment/ops closure | Integrated entry point for deploy/upgrade/check/background/systemd | `scripts/deploy.*`, `scripts/start.*` |
@@ -370,7 +370,7 @@ See [Agent Guide](assets/docs/agent-en.md).
 ### Custom Agent
 
 ```text
-创建角色 名称=旅行助手; 描述=擅长制定旅行计划; 类型=主; 工具=webfetch
+Create Role name=Travel Assistant; description=Expert at travel planning; type=primary; tools=webfetch
 ```
 
 <a id="key-implementation-details"></a>
@@ -380,7 +380,7 @@ See [Implementation Document](assets/docs/implementation-en.md).
 
 - Permission request callback: `response` is `once | always | reject`
 - Question tool interaction: answers parsed from user text replies
-- Stream and thinking cards: text and thinking分流写入 output buffer
+- Stream and thinking cards: text and thinking written to output buffer separately
 - `/undo` consistency: delete Feishu message and execute `revert` on OpenCode simultaneously
 
 <a id="troubleshooting"></a>

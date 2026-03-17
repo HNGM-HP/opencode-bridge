@@ -31,7 +31,7 @@ Directory decisions go through a complete validation pipeline:
 - realpath resolution and secondary whitelist checks
 - Git root directory normalization and re-checks
 
-Failure at any check returns a user-friendly提示 and logs the detailed reason in server logs.
+Failure at any check returns a user-friendly prompt and logs the detailed reason in server logs.
 
 ## 4. /create_chat Directory Sources (Current Behavior)
 

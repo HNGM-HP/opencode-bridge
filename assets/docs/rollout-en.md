@@ -28,19 +28,19 @@ echo "ROUTER_MODE=dual" >> .env
 
 **Legacy Mode:**
 ```
-[Config] 路由器模式：legacy
+[Config] Router mode: legacy
 ```
 
 **Dual Mode:**
 ```
-[Config] 路由器模式：dual
-[Config] ⚠️ Dual-rail mode: Will record new/old router comparison logs, does not change current behavior
-[Config] 📝 To rollback to legacy router, set ROUTER_MODE=legacy and restart service
+[Config] Router mode: dual
+[Config] Warning: Dual-rail mode: Will record new/old router comparison logs, does not change current behavior
+[Config] Note: To rollback to legacy router, set ROUTER_MODE=legacy and restart service
 ```
 
 **Router Mode:**
 ```
-[Config] 路由器模式：router
+[Config] Router mode: router
 ```
 
 ## 2. Gray Acceptance Flow
@@ -119,8 +119,8 @@ echo "ROUTER_MODE=legacy" > .env
 node scripts/start.mjs
 
 # 4. Verify rollback success
-grep "路由器模式" logs/service.log
-# Expected output: [Config] 路由器模式：legacy
+grep "Router mode" logs/service.log
+# Expected output: [Config] Router mode: legacy
 ```
 
 ### 3.3 Post-Rollback Retest
@@ -159,7 +159,7 @@ Must verify after rollback:
 
 ```bash
 # Check router mode
-grep "路由器模式" logs/service.log
+grep "Router mode" logs/service.log
 
 # Check dual-rail logs (dual mode)
 grep "\[Router\]\[dual\]" logs/service.log
