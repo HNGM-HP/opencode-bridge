@@ -500,7 +500,7 @@ async function main() {
   initLogger(logStore);
 
   console.log('╔════════════════════════════════════════════════╗');
-  console.log('║   飞书 × OpenCode 桥接服务 v2.9.2-beta-pr1 ║');
+  console.log('║   飞书 × OpenCode 桥接服务 v2.9.3-beta    ║');
   console.log('╚════════════════════════════════════════════════╝');
 
   // 1. 如果启用了 OpenCode 自动启动，先清理旧进程并启动
@@ -1659,7 +1659,7 @@ async function main() {
       password: adminPassword,
       cronManager: getRuntimeCronManager() ?? undefined,
       startedAt: new Date(),
-      version: '2.9.2-beta-pr1',
+      version: '2.9.3-beta',
     });
     adminServer.start();
   }

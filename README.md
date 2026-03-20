@@ -1,6 +1,6 @@
-# Feishu / Discord × OpenCode 桥接服务 v2.9.2-beta-pr1
+# Feishu / Discord × OpenCode 桥接服务 v2.9.3-beta
 
-[![v2.9.2-beta](https://img.shields.io/badge/v2.9.2--beta-3178C6)]()
+[![v2.9.3-beta](https://img.shields.io/badge/v2.9.3--beta-3178C6)]()
 [![Node.js >= 18](https://img.shields.io/badge/Node.js-%3E%3D18-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![License: GPLv3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
@@ -11,7 +11,7 @@
 
 不只服务飞书，也服务 Discord。通过"平台适配层 + 根路由器 + OpenCode 事件中枢 + 领域处理器"，重点解决跨平台扩展、权限闭环稳定性、目录实例一致性和线上可维护性。
 
-**v2.9.2-beta 新增 Web 可视化配置中心**：配置参数由 `.env` 迁移至 SQLite 数据库，支持通过浏览器实时修改配置、管理 Cron 任务、查看服务状态，无需手动编辑配置文件。
+**v2.9.3-beta 新增 Web 可视化配置中心**：配置参数由 `.env` 迁移至 SQLite 数据库，支持通过浏览器实时修改配置、管理 Cron 任务、查看服务状态，无需手动编辑配置文件。
 
 随着运行时 Cron（API + `/cron` + `///cron` + 自然语言语义解析）与本地可靠性治理落地，本项目和 OpenClaw 在"自动化调度 + 运维可用性"上的能力差距进一步缩小，同时保留本项目在多平台路由与权限闭环上的工程优势。
 

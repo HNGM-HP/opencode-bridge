@@ -15,7 +15,7 @@ import { initLogger } from '../utils/logger.js';
 import { logStore } from '../store/log-store.js';
 
 const ADMIN_PORT = parseInt(process.env.ADMIN_PORT ?? '4098', 10);
-const VERSION = '2.9.2-beta-pr1';
+const VERSION = '2.9.3-beta';
 
 async function main() {
   // 初始化日志收集器

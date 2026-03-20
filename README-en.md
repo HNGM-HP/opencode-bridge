@@ -1,6 +1,6 @@
-# Feishu / Discord × OpenCode Bridge Service v2.9.2-beta-pr1
+# Feishu / Discord × OpenCode Bridge Service v2.9.3-beta
 
-[![v2.9.2-beta](https://img.shields.io/badge/v2.9.2--beta-3178C6)]()
+[![v2.9.3-beta](https://img.shields.io/badge/v2.9.3--beta-3178C6)]()
 [![Node.js >= 18](https://img.shields.io/badge/Node.js-%3E%3D18-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![License: GPLv3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
@@ -11,7 +11,7 @@
 
 A cross-platform bridge layer that serves both Feishu and Discord. `v2.9.1` refactors the core from "single-file logic stack" to "platform adapter layer + root router + OpenCode event hub + domain processors", focusing on cross-platform scalability, permission loop stability, directory instance consistency, and production maintainability.
 
-**v2.9.2-beta New Feature: Web Visual Configuration Center** - Configuration parameters migrated from `.env` to SQLite database, supporting real-time configuration modification, Cron task management, and service status viewing through browser, no need to manually edit configuration files.
+**v2.9.3-beta New Feature: Web Visual Configuration Center** - Configuration parameters migrated from `.env` to SQLite database, supporting real-time configuration modification, Cron task management, and service status viewing through browser, no need to manually edit configuration files.
 
 With runtime Cron (API + `/cron` + `///cron` + natural language parsing) and local reliability governance, this project further closes the capability gap with OpenClaw in "automated scheduling + ops availability", while maintaining advantages in multi-platform routing and permission loop engineering.
 

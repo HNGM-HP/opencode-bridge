@@ -1,4 +1,4 @@
-# Working Directory and Project Strategy Guide (v2.9.2-beta-pr1)
+# Working Directory and Project Strategy Guide (v2.9.3-beta)
 
 This document describes the current working directory strategy, command entry points, and security constraints for the bridge service.
 
