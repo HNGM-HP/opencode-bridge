@@ -69,7 +69,23 @@
 ## 🖼️ 效果演示
 
 <details>
-<summary>Step 1：私聊独立会话（点击展开）</summary>
+<summary>Step 1：WEB可视化界面（点击展开）</summary>
+
+<p>
+  <img src="assets/demo/web1.png" width="720" />
+  <img src="assets/demo/web2.png" width="720" />
+  <img src="assets/demo/web3.png" width="720" />
+  <img src="assets/demo/web4.png" width="720" />
+  <img src="assets/demo/web5.png" width="720" />
+  <img src="assets/demo/web6.png" width="720" />
+  <img src="assets/demo/web7.png" width="720" />
+  <img src="assets/demo/web8.png" width="720" />
+</p>
+
+</details>
+
+<details>
+<summary>Step 2：私聊独立会话（点击展开）</summary>
 
 <p>
   <img src="assets/demo/1-1私聊独立会话.png" width="720" />
@@ -81,7 +97,7 @@
 </details>
 
 <details>
-<summary>Step 2：多群聊独立会话（点击展开）</summary>
+<summary>Step 3：多群聊独立会话（点击展开）</summary>
 
 <p>
   <img src="assets/demo/2-1多群聊独立会话.png" width="720" />
@@ -92,7 +108,7 @@
 </details>
 
 <details>
-<summary>Step 3：图片附件解析（点击展开）</summary>
+<summary>Step 4：图片附件解析（点击展开）</summary>
 
 <p>
   <img src="assets/demo/3-1图片附件解析.png" width="720" />
@@ -103,7 +119,7 @@
 </details>
 
 <details>
-<summary>Step 4：交互工具测试（点击展开）</summary>
+<summary>Step 5：交互工具测试（点击展开）</summary>
 
 <p>
   <img src="assets/demo/4-1交互工具测试.png" width="720" />
@@ -113,7 +129,7 @@
 </details>
 
 <details>
-<summary>Step 5：底层权限测试（点击展开）</summary>
+<summary>Step 6：底层权限测试（点击展开）</summary>
 
 <p>
   <img src="assets/demo/5-1底层权限测试.png" width="720" />
@@ -125,28 +141,12 @@
 </details>
 
 <details>
-<summary>Step 6：会话清理（点击展开）</summary>
+<summary>Step 7：会话清理（点击展开）</summary>
 
 <p>
   <img src="assets/demo/6-1会话清理.png" width="720" />
   <img src="assets/demo/6-2会话清理.png.png" width="720" />
   <img src="assets/demo/6-3会话清理.png.png" width="720" />
-</p>
-
-</details>
-
-<details>
-<summary>Step 7：WEB可视化界面（点击展开）</summary>
-
-<p>
-  <img src="assets/demo/web1.png" width="720" />
-  <img src="assets/demo/web2.png" width="720" />
-  <img src="assets/demo/web3.png" width="720" />
-  <img src="assets/demo/web4.png" width="720" />
-  <img src="assets/demo/web5.png" width="720" />
-  <img src="assets/demo/web6.png" width="720" />
-  <img src="assets/demo/web7.png" width="720" />
-  <img src="assets/demo/web8.png" width="720" />
 </p>
 
 </details>
