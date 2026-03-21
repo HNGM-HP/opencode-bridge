@@ -9,7 +9,29 @@ import { wecomAdapter } from './platform/adapters/wecom-adapter.js';
 import { telegramAdapter } from './platform/adapters/telegram-adapter.js';
 import { qqAdapter } from './platform/adapters/qq-adapter.js';
 import { whatsappAdapter } from './platform/adapters/whatsapp-adapter.js';
+import type { PlatformSender } from './platform/types.js';
 import { opencodeClient, type PermissionRequestEvent } from './opencode/client.js';
+
+// 根据平台获取正确的 Sender
+function getSenderByPlatform(platform: string): PlatformSender | null {
+  switch (platform) {
+    case 'feishu':
+      return feishuAdapter.getSender();
+    case 'discord':
+      return discordAdapter.getSender();
+    case 'wecom':
+      return wecomAdapter.getSender();
+    case 'telegram':
+      return telegramAdapter.getSender();
+    case 'qq':
+      return qqAdapter.getSender();
+    case 'whatsapp':
+      return whatsappAdapter.getSender();
+    default:
+      console.warn(`[getSenderByPlatform] 未知平台: ${platform}, 使用飞书作为fallback`);
+      return feishuAdapter.getSender();
+  }
+}
 import { outputBuffer } from './opencode/output-buffer.js';
 import { delayedResponseHandler } from './opencode/delayed-handler.js';
 import { questionHandler } from './opencode/question-handler.js';
@@ -310,13 +332,7 @@ export const bootstrapReliabilityLifecycle = (
       return true;
     },
     getSender: platform => {
-      if (platform === 'feishu') {
-        return feishuAdapter.getSender();
-      }
-      if (platform === 'discord') {
-        return discordAdapter.getSender();
-      }
-      return null;
+      return getSenderByPlatform(platform);
     },
     logger: {
       info: message => {
@@ -1528,7 +1544,11 @@ async function main() {
     };
 
     if (platform !== 'feishu') {
-      const sender = platform === 'discord' ? discordAdapter.getSender() : feishuAdapter.getSender();
+      const sender = getSenderByPlatform(platform);
+      if (!sender) {
+        console.error(`[outputBuffer] 无法获取平台 ${platform} 的 sender`);
+        return;
+      }
       const payload = buildPortableUpdatePayload(cardData, conversationId, platform);
       const nextMessageIds: string[] = [];
       const existingMessageId = existingMessageIds[0];
@@ -1762,8 +1782,10 @@ async function main() {
     outputBuffer.setStatus(bufferKey, 'failed');
 
     if (!existingBuffer.messageId) {
-      const sender = platform === 'discord' ? discordAdapter.getSender() : feishuAdapter.getSender();
-      await sender.sendText(conversationId, `❌ ${errorText}`);
+      const sender = getSenderByPlatform(platform);
+      if (sender) {
+        await sender.sendText(conversationId, `❌ ${errorText}`);
+      }
     }
   };
 

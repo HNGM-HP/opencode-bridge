@@ -397,20 +397,21 @@ export class OpenCodeEventHub {
         const adapter = platformRegistry.get('wecom');
         if (adapter) {
           const sender = adapter.getSender();
-          const riskText = permissionInfo.risk === 'high' ? '⚠️ **高风险**' :
-                          permissionInfo.risk === 'medium' ? '⚡ **中等风险**' : '✅ **低风险**';
-          const permissionText = `🔐 **权限确认请求**
+          const riskEmoji = permissionInfo.risk === 'high' ? '🔴' :
+                          permissionInfo.risk === 'medium' ? '🟡' : '🟢';
+          const riskLabel = permissionInfo.risk === 'high' ? '高风险' :
+                          permissionInfo.risk === 'medium' ? '中等风险' : '低风险';
+          // 企业微信 Markdown 格式有限，使用 > 引用和纯文本
+          const permissionText = `> 🔐 权限确认请求
 
-**工具名称:** ${permissionInfo.tool}
-**操作描述:** ${permissionInfo.description}
-**风险等级:** ${riskText}
+工具名称: ${permissionInfo.tool}
+操作描述: ${permissionInfo.description}
+风险等级: ${riskEmoji} ${riskLabel}
 
-请回复以下选项之一:
-- 1 或 允许 - 允许本次操作
-- 2 或 拒绝 - 拒绝本次操作
-- 3 或 始终允许 - 始终允许此工具
-
-也可以直接回复: 允许 / 拒绝 / 始终允许 (或 y / n / always)`;
+请回复选项编号或关键词:
+1️⃣ 允许 (或回复 y)
+2️⃣ 拒绝 (或回复 n)
+3️⃣ 始终允许 (或回复 always)`;
           sender.sendText(route.conversationId, permissionText).catch(err => {
             console.error('[权限] 企业微信权限请求通知发送失败:', err);
           });
@@ -981,29 +982,30 @@ export class OpenCodeEventHub {
 
   /**
    * 构建企业微信 Markdown 格式的问答提示文本消息
+   * 企业微信 Markdown 格式有限，避免使用 **粗体**、_斜体_ 等语法
    */
   private buildWeComQuestionText(request: import('../opencode/question-handler.js').QuestionRequest): string {
     const totalQuestions = request.questions.length;
-    const lines: string[] = ['🤝 **AI 需要您回答以下问题：**'];
+    const lines: string[] = ['> 🤝 AI 需要您回答以下问题：'];
 
     for (let i = 0; i < totalQuestions; i++) {
       const question = request.questions[i];
       const questionNum = i + 1;
-      lines.push(`\n**【问题 ${questionNum}/${totalQuestions}】**`);
+      lines.push(`\n【问题 ${questionNum}/${totalQuestions}】`);
       if (question.header) {
-        lines.push(`**${question.header}**`);
+        lines.push(question.header);
       }
       if (question.question) {
         lines.push(question.question);
       }
       if (question.options && question.options.length > 0) {
-        lines.push('\n**选项：**');
+        lines.push('\n选项：');
         for (let j = 0; j < question.options.length; j++) {
           const option = question.options[j];
-          lines.push(`> ${j + 1}. **${option.label}**${option.description ? ` - ${option.description}` : ''}`);
+          lines.push(`  ${j + 1}️⃣ ${option.label}${option.description ? ` - ${option.description}` : ''}`);
         }
         if (question.multiple) {
-          lines.push('_（可多选，用空格或逗号分隔多个编号）_');
+          lines.push('（可多选，用空格或逗号分隔多个编号）');
         }
       }
     }

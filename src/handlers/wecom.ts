@@ -182,35 +182,36 @@ export class WeComHandler {
 
   /**
    * 获取企业微信帮助文本
+   * 企业微信 Markdown 格式有限，使用纯文本 + emoji
    */
   private getWeComHelpText(): string {
-    return `**企业微信 x OpenCode 机器人指南**
+    return `> 📖 企业微信 x OpenCode 机器人指南
 
-**如何对话**
+💬 如何对话
 直接发送消息即可与 AI 对话。
 
-**常用命令**
-- \`/help\` 显示帮助
-- \`/status\` 查看当前会话状态
-- \`/session\` 查看当前会话
-- \`/session new\` 创建新会话
-- \`/sessions\` 列出所有会话
-- \`/model\` 查看当前模型
-- \`/model <名称>\` 切换模型
-- \`/agent\` 查看当前角色
-- \`/agent <名称>\` 切换角色
-- \`/agent off\` 切回默认角色
-- \`/effort\` 查看当前推理强度
-- \`/effort <档位>\` 设置推理强度 (low/high/xhigh)
-- \`/stop\` 停止当前生成
-- \`/undo\` 撤回上一轮对话
-- \`/compact\` 压缩上下文
-- \`/rename <名称>\` 重命名会话
-- \`/clear\` 清空对话上下文
+⚡ 常用命令
+/help - 显示帮助
+/status - 查看当前会话状态
+/session - 查看当前会话
+/session new - 创建新会话
+/sessions - 列出所有会话
+/model - 查看当前模型
+/model <名称> - 切换模型
+/agent - 查看当前角色
+/agent <名称> - 切换角色
+/agent off - 切回默认角色
+/effort - 查看当前推理强度
+/effort <档位> - 设置推理强度 (low/high/xhigh)
+/stop - 停止当前生成
+/undo - 撤回上一轮对话
+/compact - 压缩上下文
+/rename <名称> - 重命名会话
+/clear - 清空对话上下文
 
-**提示**
-- 切换的模型/角色仅对当前会话生效
-- 其他未知 \`/xxx\` 命令会自动透传给 OpenCode`;
+💡 提示
+切换的模型/角色仅对当前会话生效
+其他未知 /xxx 命令会自动透传给 OpenCode`;
   }
 
   /**
@@ -235,13 +236,13 @@ export class WeComHandler {
           return;
         }
         const lines = [
-          `**会话状态**`,
-          `- 会话ID: ${session.sessionId.slice(0, 8)}...`,
-          `- 标题: ${session.title || '未命名'}`,
-          `- 模型: ${session.preferredModel || '默认'}`,
-          `- 角色: ${session.preferredAgent || '默认'}`,
-          `- 强度: ${session.preferredEffort || '默认'}`,
-          `- 工作目录: ${session.resolvedDirectory || '默认'}`,
+          `📊 会话状态`,
+          `会话ID: ${session.sessionId.slice(0, 8)}...`,
+          `标题: ${session.title || '未命名'}`,
+          `模型: ${session.preferredModel || '默认'}`,
+          `角色: ${session.preferredAgent || '默认'}`,
+          `强度: ${session.preferredEffort || '默认'}`,
+          `工作目录: ${session.resolvedDirectory || '默认'}`,
         ];
         await sender.sendText(chatId, lines.join('\n'));
         break;
@@ -424,22 +425,22 @@ export class WeComHandler {
         return;
       }
 
-      const lines = [`**会话列表** (${sessions.length} 个)`, ''];
+      const lines = [`📋 会话列表 (${sessions.length} 个)`, ''];
       const displaySessions = sessions.slice(0, 20);
 
       for (const session of displaySessions) {
         const title = session.title || '未命名';
         const shortId = session.id.slice(0, 8);
         const dir = session.directory || '默认目录';
-        lines.push(`- ${shortId} | ${title.slice(0, 30)}${title.length > 30 ? '...' : ''}`);
-        lines.push(`  目录: ${dir}`);
+        lines.push(`${shortId} | ${title.slice(0, 30)}${title.length > 30 ? '...' : ''}`);
+        lines.push(`  📁 ${dir}`);
       }
 
       if (sessions.length > 20) {
         lines.push(`\n... 还有 ${sessions.length - 20} 个会话`);
       }
 
-      lines.push('\n使用 `/session <sessionId>` 切换会话');
+      lines.push('\n使用 /session <sessionId> 切换会话');
 
       await sender.sendText(chatId, lines.join('\n'));
     } catch (error) {
@@ -675,10 +676,10 @@ export class WeComHandler {
         return;
       }
 
-      const lines = [`**可用命令** (${commands.length} 个)`, ''];
+      const lines = [`⚡ 可用命令 (${commands.length} 个)`, ''];
       for (const cmd of commands.slice(0, 30)) {
         const desc = cmd.description ? ` - ${cmd.description.slice(0, 50)}` : '';
-        lines.push(`- \`/${cmd.name}\`${desc}`);
+        lines.push(`/${cmd.name}${desc}`);
       }
 
       if (commands.length > 30) {
@@ -868,17 +869,17 @@ export class WeComHandler {
     const riskText = pending.risk === 'high' ? '高风险' : pending.risk === 'medium' ? '中等风险' : '低风险';
 
     const lines = [
-      '**🔐 权限确认请求**',
+      '> 🔐 权限确认请求',
       '',
-      `**工具**: ${pending.tool}`,
-      `**描述**: ${pending.description}`,
-      `**风险**: ${riskEmoji} ${riskText}`,
+      `工具: ${pending.tool}`,
+      `描述: ${pending.description}`,
+      `风险: ${riskEmoji} ${riskText}`,
       '',
       '---',
-      '**请回复以下选项之一：**',
-      '- `允许` 或 `y` - 允许本次操作',
-      '- `始终允许` 或 `always` - 允许并记住此工具',
-      '- `拒绝` 或 `n` - 拒绝本次操作',
+      '请回复以下选项之一：',
+      '1️⃣ 允许 (或回复 y)',
+      '2️⃣ 始终允许 (或回复 always)',
+      '3️⃣ 拒绝 (或回复 n)',
     ];
 
     const message = lines.join('\n');
@@ -986,8 +987,8 @@ export class WeComHandler {
     const header = question.header || `问题 ${questionIndex + 1}`;
 
     const lines: string[] = [
-      `**🤝 ${header}**`,
-      `*(第 ${questionIndex + 1}/${totalQuestions} 题)*`,
+      `> 🤝 ${header}`,
+      `(第 ${questionIndex + 1}/${totalQuestions} 题)`,
       '',
       question.question,
       '',
@@ -995,11 +996,10 @@ export class WeComHandler {
 
     // 添加选项
     if (question.options && question.options.length > 0) {
-      lines.push('**选项：**');
+      lines.push('选项：');
       question.options.forEach((opt, idx) => {
-        const letter = String.fromCharCode(65 + idx); // A, B, C...
         const desc = opt.description ? ` - ${opt.description}` : '';
-        lines.push(`\`${letter}\`. ${opt.label}${desc}`);
+        lines.push(`${idx + 1}️⃣ ${opt.label}${desc}`);
       });
       lines.push('');
     }
@@ -1007,12 +1007,12 @@ export class WeComHandler {
     // 提示信息
     lines.push('---');
     if (question.multiple) {
-      lines.push('*可多选，用空格或逗号分隔多个选项编号*');
+      lines.push('可多选，用空格或逗号分隔多个选项编号');
     }
     if (question.custom !== false) {
-      lines.push('*也可以直接输入自定义答案*');
+      lines.push('也可以直接输入自定义答案');
     }
-    lines.push('*回复 `跳过` 可跳过此题*');
+    lines.push('回复"跳过"可跳过此题');
 
     const message = lines.join('\n');
     await sender.sendText(chatId, message);
