@@ -93,8 +93,8 @@ class WhatsAppPersonalSender implements PlatformSender {
 
     try {
       // WhatsApp 支持多种消息类型，这里使用文本格式
-      const cardPayload = card as { text?: string; content?: string; whatsappText?: string };
-      const text = cardPayload.whatsappText || cardPayload.text || cardPayload.content || JSON.stringify(card, null, 2);
+      const cardPayload = card as { text?: string; content?: string; whatsappText?: string; markdown?: string };
+      const text = cardPayload.whatsappText || cardPayload.text || cardPayload.markdown || cardPayload.content || JSON.stringify(card, null, 2);
 
       const sent = await socket.sendMessage(conversationId, { text });
       if (sent?.key?.id) {
@@ -264,6 +264,7 @@ class WhatsAppBusinessSender implements PlatformSender {
     const cardPayload = card as {
       whatsappText?: string;
       text?: string;
+      markdown?: string;
       body?: string;
       buttons?: Array<{ id: string; title: string }>;
     };
@@ -283,7 +284,7 @@ class WhatsAppBusinessSender implements PlatformSender {
             type: 'interactive',
             interactive: {
               type: 'button',
-              body: { text: cardPayload.whatsappText || cardPayload.text || cardPayload.body || '请选择操作' },
+              body: { text: cardPayload.whatsappText || cardPayload.text || cardPayload.markdown || cardPayload.body || '请选择操作' },
               action: {
                 buttons: cardPayload.buttons.slice(0, 3).map(btn => ({
                   type: 'reply',

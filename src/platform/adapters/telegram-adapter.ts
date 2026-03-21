@@ -26,6 +26,7 @@ const TELEGRAM_FILE_BASE_URL = 'https://api.telegram.org/file/bot';
 type TelegramCardPayload = {
   telegramText?: string;
   text?: string;
+  markdown?: string;
   buttons?: Array<{
     text: string;
     callback_data: string;
@@ -64,13 +65,6 @@ class TelegramSender implements PlatformSender {
     return chunks;
   }
 
-  /**
-   * 转义 MarkdownV2 特殊字符
-   */
-  private escapeMarkdownV2(text: string): string {
-    return text.replace(/[_*[\]()~`>#+\-=|{}.!\\]/g, '\\$&');
-  }
-
   async sendText(conversationId: string, text: string): Promise<string | null> {
     const bot = this.adapter.getBot();
     if (!bot) {
@@ -86,9 +80,8 @@ class TelegramSender implements PlatformSender {
     let firstMessageId: string | null = null;
     try {
       for (const chunk of chunks) {
-        const result = await bot.api.sendMessage(conversationId, chunk, {
-          parse_mode: 'MarkdownV2',
-        });
+        // 不使用 parse_mode，发送纯文本避免 MarkdownV2 转义问题
+        const result = await bot.api.sendMessage(conversationId, chunk);
         this.adapter.rememberMessageConversation(String(result.message_id), conversationId);
         if (!firstMessageId) {
           firstMessageId = String(result.message_id);
@@ -97,21 +90,7 @@ class TelegramSender implements PlatformSender {
       return firstMessageId;
     } catch (error) {
       console.error('[Telegram] 发送文本消息失败:', error);
-      // 尝试不使用 Markdown 格式重发
-      try {
-        let fallbackFirstMessageId: string | null = null;
-        for (const chunk of chunks) {
-          const result = await bot.api.sendMessage(conversationId, this.escapeMarkdownV2(chunk));
-          this.adapter.rememberMessageConversation(String(result.message_id), conversationId);
-          if (!fallbackFirstMessageId) {
-            fallbackFirstMessageId = String(result.message_id);
-          }
-        }
-        return fallbackFirstMessageId;
-      } catch (fallbackError) {
-        console.error('[Telegram] 降级发送也失败:', fallbackError);
-        return null;
-      }
+      return null;
     }
   }
 
@@ -122,13 +101,14 @@ class TelegramSender implements PlatformSender {
       return null;
     }
 
-    try {
-      const payload = card as TelegramCardPayload;
-      const content = payload.telegramText || payload.text || JSON.stringify(card, null, 2);
+    const payload = card as TelegramCardPayload;
+    // 优先使用 telegramText（纯文本格式），避免 MarkdownV2 转义问题
+    const content = payload.telegramText || payload.text || payload.markdown || JSON.stringify(card, null, 2);
 
+    try {
       const keyboard = this.buildInlineKeyboard(payload.buttons);
+      // 不使用 parse_mode，发送纯文本避免 MarkdownV2 转义问题
       const result = await bot.api.sendMessage(conversationId, content, {
-        parse_mode: 'MarkdownV2',
         reply_markup: keyboard,
       });
 
@@ -137,7 +117,7 @@ class TelegramSender implements PlatformSender {
     } catch (error) {
       console.error('[Telegram] 发送卡片消息失败:', error);
       // 降级为普通文本发送
-      return this.sendText(conversationId, JSON.stringify(card, null, 2));
+      return this.sendText(conversationId, content);
     }
   }
 
@@ -156,11 +136,12 @@ class TelegramSender implements PlatformSender {
 
     try {
       const payload = card as TelegramCardPayload;
-      const content = payload.telegramText || payload.text || JSON.stringify(card, null, 2);
+      // 优先使用 telegramText（纯文本格式）
+      const content = payload.telegramText || payload.text || payload.markdown || JSON.stringify(card, null, 2);
       const keyboard = this.buildInlineKeyboard(payload.buttons);
 
+      // 不使用 parse_mode，发送纯文本
       await bot.api.editMessageText(conversationId, Number(messageId), content, {
-        parse_mode: 'MarkdownV2',
         reply_markup: keyboard,
       });
       return true;
@@ -270,13 +251,19 @@ export class TelegramAdapter implements PlatformAdapter {
         await this.handleCallbackQuery(ctx);
       });
 
-      // 启动 Long Polling
-      await this.bot.start({
+      // 启动 Long Polling（非阻塞，让 bot 在后台运行）
+      this.bot.start({
         onStart: () => {
           this.isActive = true;
           console.log('[Telegram] Long Polling 已启动');
         },
+      }).catch(error => {
+        console.error('[Telegram] Long Polling 运行出错:', error);
+        this.bot = null;
+        this.isActive = false;
       });
+      // 不等待 start() 完成，因为它是一个无限循环
+      // 立即返回，让后续平台可以启动
     } catch (error) {
       console.error('[Telegram] 启动失败:', error);
       this.bot = null;

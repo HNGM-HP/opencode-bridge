@@ -76,6 +76,8 @@ type QQMessage = {
 type QQCardPayload = {
   qqText?: string;
   content?: string;
+  text?: string;
+  markdown?: string;
 };
 
 // ──────────────────────────────────────────────
@@ -704,7 +706,7 @@ class QQSender implements PlatformSender {
 
   async sendCard(conversationId: string, card: object): Promise<string | null> {
     const payload = card as QQCardPayload;
-    const content = payload.qqText || payload.content || JSON.stringify(card);
+    const content = payload.qqText || payload.text || payload.markdown || payload.content || JSON.stringify(card);
     return this.sendText(conversationId, content);
   }
 

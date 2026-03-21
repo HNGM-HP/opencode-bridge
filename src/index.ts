@@ -1000,6 +1000,53 @@ async function main() {
     return `${platform}:${resolvedConversationId}`;
   };
 
+  /**
+   * 构建 Telegram 纯文本格式（不含 MarkdownV2 特殊字符）
+   */
+  const buildTelegramText = (data: StreamCardData, showThinking: boolean = true): string => {
+    const mainText = data.text.trim();
+    const thinkingText = showThinking ? data.thinking.trim() : '';
+
+    if (mainText && thinkingText) {
+      const clippedThinking = thinkingText.length > 1400
+        ? `${thinkingText.slice(0, 1400)}\n...(思考内容已截断)`
+        : thinkingText;
+      return [
+        '💭 思考过程：',
+        clippedThinking,
+        '',
+        '📝 回复：',
+        mainText,
+      ].join('\n');
+    }
+
+    if (mainText) {
+      return mainText;
+    }
+
+    if (thinkingText) {
+      const clippedThinking = thinkingText.length > 1400
+        ? `${thinkingText.slice(0, 1400)}\n...(思考内容已截断)`
+        : thinkingText;
+      return [
+        '💭 思考过程：',
+        clippedThinking,
+        '',
+        '⏳ 正在生成回复...',
+      ].join('\n');
+    }
+
+    if (data.status === 'failed') {
+      return '❌ 执行失败';
+    }
+
+    if (data.status === 'completed') {
+      return '✅ 已完成';
+    }
+
+    return '⏳ 正在处理...';
+  };
+
   const buildPortableUpdateText = (data: StreamCardData, showThinking: boolean = true): string => {
     const mainText = data.text.trim();
     const thinkingText = showThinking ? data.thinking.trim() : '';
@@ -1049,14 +1096,21 @@ async function main() {
     return '⏳ 正在处理...';
   };
 
-  const buildPortableUpdatePayload = (data: StreamCardData, conversationId: string, platform: string = 'feishu'): { discordText: string; discordComponents?: Array<{
-    type: 'select';
-    customId: string;
-    placeholder: string;
-    options: Array<{ label: string; value: string; description?: string }>;
-    minValues?: number;
-    maxValues?: number;
-  }> } => {
+  const buildPortableUpdatePayload = (data: StreamCardData, conversationId: string, platform: string = 'feishu'): {
+    text: string;
+    markdown: string;
+    telegramText: string;
+    discordText: string;
+    discordComponents?: Array<{
+      type: 'select';
+      customId: string;
+      placeholder: string;
+      options: Array<{ label: string; value: string; description?: string }>;
+      minValues?: number;
+      maxValues?: number;
+    }>;
+    buttons?: Array<{ text: string; callback_data: string }>;
+  } => {
     // 根据平台读取可见性配置
     const showThinkingChain = platform === 'discord'
       ? outputConfig.discord.showThinkingChain
@@ -1084,13 +1138,16 @@ async function main() {
     };
 
     const baseText = buildPortableUpdateText(filteredData, showThinkingChain);
+    const telegramBaseText = buildTelegramText(filteredData, showThinkingChain);
+
     if (!data.pendingQuestion) {
-      return { discordText: baseText };
+      return { text: baseText, markdown: baseText, telegramText: telegramBaseText, discordText: baseText };
     }
 
     const questionLine = `❓ ${data.pendingQuestion.question}`;
     const progressLine = `第 ${data.pendingQuestion.questionIndex + 1}/${data.pendingQuestion.totalQuestions} 题`;
     const discordText = `${baseText}\n${questionLine}\n${progressLine}`;
+    const telegramTextWithQuestion = `${telegramBaseText}\n\n${questionLine}\n${progressLine}`;
 
     const optionList = data.pendingQuestion.options
       .filter(option => option.label.trim().length > 0)
@@ -1108,14 +1165,26 @@ async function main() {
     }];
 
     if (options.length === 0) {
-      return { discordText };
+      return { text: discordText, markdown: discordText, telegramText: telegramTextWithQuestion, discordText };
     }
 
     const maxValues = data.pendingQuestion.multiple
       ? Math.min(Math.max(1, optionList.length), 25)
       : 1;
 
+    // Telegram 按钮
+    const telegramButtons = optionList.slice(0, 8).map((opt, idx) => ({
+      text: opt.label,
+      callback_data: `oc_question:${idx}`,
+    }));
+    if (telegramButtons.length < 8) {
+      telegramButtons.push({ text: '跳过本题', callback_data: 'oc_question:skip' });
+    }
+
     return {
+      text: discordText,
+      markdown: discordText,
+      telegramText: telegramTextWithQuestion,
       discordText,
       discordComponents: [
         {
@@ -1127,6 +1196,7 @@ async function main() {
           maxValues,
         },
       ],
+      buttons: telegramButtons,
     };
   };
 

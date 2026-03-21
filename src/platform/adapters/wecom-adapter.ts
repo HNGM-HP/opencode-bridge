@@ -80,9 +80,19 @@ class WeComSender implements PlatformSender {
     }
 
     try {
-      // 企业微信卡片消息使用 markdown 格式
-      const cardPayload = card as { markdown?: string; content?: string };
-      const content = cardPayload.markdown || cardPayload.content || JSON.stringify(card, null, 2);
+      // 支持多种格式的卡片消息
+      const cardPayload = card as {
+        text?: string;
+        markdown?: string;
+        content?: string;
+        discordText?: string;
+      };
+      // 优先使用 markdown，然后是 text，然后是 content，最后是 discordText
+      const content = cardPayload.markdown ||
+                      cardPayload.text ||
+                      cardPayload.content ||
+                      cardPayload.discordText ||
+                      JSON.stringify(card, null, 2);
 
       const result = await wsClient.sendMessage(conversationId, {
         msgtype: 'markdown',
