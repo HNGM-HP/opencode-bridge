@@ -193,9 +193,11 @@ export const createRescueOrchestrator = (
         const startOpenCode = async (): Promise<void> => {
           return new Promise((resolve, reject) => {
             try {
+              const isWindows = process.platform === 'win32';
               const child = spawn('opencode', [], {
                 detached: true,
                 stdio: 'ignore',
+                shell: isWindows,
               });
               child.unref();
               setTimeout(() => resolve(), 2000);
@@ -524,7 +526,7 @@ async function main() {
   initLogger(logStore);
 
   console.log('╔════════════════════════════════════════════════╗');
-  console.log('║   飞书 × OpenCode 桥接服务 v2.9.3-beta    ║');
+  console.log('║   飞书 × OpenCode 桥接服务 v2.9.5-beta    ║');
   console.log('╚════════════════════════════════════════════════╝');
 
   // 1. 如果启用了 OpenCode 自动启动，先清理旧进程并启动
@@ -538,9 +540,13 @@ async function main() {
       await new Promise(resolve => setTimeout(resolve, 3000));
 
       const { spawn } = await import('node:child_process');
-      opencodeChildProcess = spawn(opencodeConfig.autoStartCmd, [], {
+      // Windows 下需要 shell: true 才能正确执行带参数的命令
+      const isWindows = process.platform === 'win32';
+      const cmdParts = opencodeConfig.autoStartCmd.split(' ');
+      opencodeChildProcess = spawn(cmdParts[0], cmdParts.slice(1), {
         stdio: 'ignore',
         detached: true,
+        shell: isWindows,
       });
 
       opencodeChildProcess.on('error', (err) => {
@@ -581,7 +587,7 @@ async function main() {
   // 2. 连接 OpenCode
   const connected = await opencodeClient.connect();
   if (!connected) {
-    console.error('无法连接到OpenCode服务器，请确保 opencode serve 已运行');
+    console.error('[OpenCode] 无法连接到服务器，请确保 opencode serve 已运行');
     process.exit(1);
   }
 
@@ -1947,7 +1953,7 @@ async function main() {
   try {
     await wecomAdapter.start();
   } catch (e) {
-    console.error('[WeCom] 启动失败:', e);
+    console.error('[企业微信] 启动失败:', e);
     // WeCom 启动失败不影响其他平台流程
   }
 
@@ -2037,49 +2043,49 @@ async function main() {
     try {
       discordAdapter.stop();
     } catch (e) {
-      console.error('停止 Discord 适配器失败:', e);
+      console.error('[Discord] 停止适配器失败:', e);
     }
 
     // 3.5. 停止企业微信适配器
     try {
       wecomAdapter.stop();
     } catch (e) {
-      console.error('停止企业微信适配器失败:', e);
+      console.error('[企业微信] 停止适配器失败:', e);
     }
 
     // 3.6. 停止 Telegram 适配器
     try {
       telegramAdapter.stop();
     } catch (e) {
-      console.error('停止 Telegram 适配器失败:', e);
+      console.error('[Telegram] 停止适配器失败:', e);
     }
 
     // 3.7. 停止 QQ 适配器
     try {
       qqAdapter.stop();
     } catch (e) {
-      console.error('停止 QQ 适配器失败:', e);
+      console.error('[QQ] 停止适配器失败:', e);
     }
 
     // 3.8. 停止 WhatsApp 适配器
     try {
       whatsappAdapter.stop();
     } catch (e) {
-      console.error('停止 WhatsApp 适配器失败:', e);
+      console.error('[WhatsApp] 停止适配器失败:', e);
     }
 
     // 4. 停止飞书连接
     try {
       feishuClient.stop();
     } catch (e) {
-      console.error('停止飞书连接失败:', e);
+      console.error('[飞书] 停止连接失败:', e);
     }
 
     // 5. 断开 OpenCode 连接
     try {
       opencodeClient.disconnect();
     } catch (e) {
-      console.error('断开 OpenCode 失败:', e);
+      console.error('[OpenCode] 断开连接失败:', e);
     }
 
     // 6. 清理所有缓冲区和定时器
@@ -2088,7 +2094,7 @@ async function main() {
       delayedResponseHandler.cleanupExpired(0);
       questionHandler.cleanupExpired(0);
     } catch (e) {
-      console.error('清理资源失败:', e);
+      console.error('[System] 清理资源失败:', e);
     }
 
     // 延迟退出以确保所有清理完成

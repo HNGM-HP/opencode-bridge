@@ -106,7 +106,7 @@ opencode-bridge --config-dir ~/.config/opencode-bridge
 
 ### .env File (Startup Parameters)
 
-After v2.9.5-beta, `.env` file only stores Admin panel startup parameters:
+In current version, `.env` file only stores Admin panel startup parameters:
 
 ```dotenv
 # Admin panel port (default 4098)

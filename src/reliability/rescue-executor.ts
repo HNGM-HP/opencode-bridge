@@ -321,7 +321,7 @@ async function writeAudit(
       },
     });
   } catch (error) {
-    console.error('[rescue-executor] writeAudit failed:', error instanceof Error ? error.message : String(error));
+    console.error('[RescueExecutor] writeAudit failed:', error instanceof Error ? error.message : String(error));
     return;
   }
 }

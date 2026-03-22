@@ -199,7 +199,7 @@ export const routerConfig = {
 
 // 飞书配置
 export const feishuConfig = {
-  enabled: parseBooleanEnv(process.env.FEISHU_ENABLED, true), // 默认启用
+  enabled: parseBooleanEnv(process.env.FEISHU_ENABLED, false), // 默认禁用
   appId: process.env.FEISHU_APP_ID || '',
   appSecret: process.env.FEISHU_APP_SECRET || '',
   encryptKey: process.env.FEISHU_ENCRYPT_KEY,
@@ -457,31 +457,35 @@ export function validateConfig(): void {
     errors.push('至少需要配置一个平台:');
     if (!platformStatus.feishu) {
       if (!feishuConfig.enabled) {
-        errors.push('  - 飞书: 已禁用 (FEISHU_ENABLED=false)');
+        errors.push('  - 飞书: 未启用');
       } else {
         errors.push('  - 飞书: 缺少 FEISHU_APP_ID 或 FEISHU_APP_SECRET');
       }
     }
     if (!platformStatus.discord) {
-      errors.push('  - Discord: 需设置 DISCORD_ENABLED=true 并配置 DISCORD_TOKEN');
+      if (!discordConfig.enabled) {
+        errors.push('  - Discord: 未启用');
+      } else {
+        errors.push('  - Discord: 缺少 DISCORD_TOKEN');
+      }
     }
     if (!platformStatus.wecom) {
       if (!wecomConfig.enabled) {
-        errors.push('  - 企业微信：已禁用 (WECOM_ENABLED=false)');
+        errors.push('  - 企业微信: 未启用');
       } else {
-        errors.push('  - 企业微信：缺少 WECOM_BOT_ID 或 WECOM_SECRET');
+        errors.push('  - 企业微信: 缺少 WECOM_BOT_ID 或 WECOM_SECRET');
       }
     }
     if (!platformStatus.telegram) {
       if (!telegramConfig.enabled) {
-        errors.push('  - Telegram: 已禁用 (TELEGRAM_ENABLED=false)');
+        errors.push('  - Telegram: 未启用');
       } else {
         errors.push('  - Telegram: 缺少 TELEGRAM_BOT_TOKEN');
       }
     }
     if (!platformStatus.qq) {
       if (!qqConfig.enabled) {
-        errors.push('  - QQ: 已禁用 (QQ_ENABLED=false)');
+        errors.push('  - QQ: 未启用');
       } else if (qqConfig.protocol === 'official') {
         errors.push('  - QQ官方API: 缺少 QQ_APP_ID 或 QQ_SECRET');
       } else {
@@ -490,7 +494,7 @@ export function validateConfig(): void {
     }
     if (!platformStatus.whatsapp) {
       if (!whatsappConfig.enabled) {
-        errors.push('  - WhatsApp: 已禁用 (WHATSAPP_ENABLED=false)');
+        errors.push('  - WhatsApp: 未启用');
       } else if (whatsappConfig.mode === 'business') {
         errors.push('  - WhatsApp Business: 缺少 WHATSAPP_BUSINESS_PHONE_ID 或 WHATSAPP_BUSINESS_ACCESS_TOKEN');
       } else {

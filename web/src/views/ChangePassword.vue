@@ -20,6 +20,7 @@
         <template #default>
           为了账户安全，首次登录必须修改密码后才能继续使用。
           新密码长度至少 8 位。
+          <br /><strong>原密码</strong>即您刚才登录时使用的密码。
         </template>
       </el-alert>
 

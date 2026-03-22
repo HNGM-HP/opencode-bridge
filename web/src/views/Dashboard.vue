@@ -53,78 +53,7 @@
       </el-col>
     </el-row>
 
-    <!-- 平台状态 -->
-    <el-row :gutter="20" class="stat-row">
-      <el-col :span="8">
-        <el-card shadow="hover" class="platform-card">
-          <template #header>
-            <div class="platform-header">
-              <el-icon size="20"><ChatDotRound /></el-icon>
-              <span>飞书平台</span>
-            </div>
-          </template>
-          <div class="platform-status">
-            <div class="status-row">
-              <span class="status-label">App ID:</span>
-              <span class="status-value">{{ maskId(settings.FEISHU_APP_ID) }}</span>
-            </div>
-            <div class="status-row">
-              <span class="status-label">配置状态:</span>
-              <el-tag :type="settings.FEISHU_APP_ID && settings.FEISHU_APP_SECRET ? 'success' : 'warning'" size="small">
-                {{ settings.FEISHU_APP_ID && settings.FEISHU_APP_SECRET ? '已配置' : '未配置' }}
-              </el-tag>
-            </div>
-          </div>
-        </el-card>
-      </el-col>
-      <el-col :span="8">
-        <el-card shadow="hover" class="platform-card">
-          <template #header>
-            <div class="platform-header">
-              <el-icon size="20"><Connection /></el-icon>
-              <span>Discord 平台</span>
-            </div>
-          </template>
-          <div class="platform-status">
-            <div class="status-row">
-              <span class="status-label">Client ID:</span>
-              <span class="status-value">{{ maskId(settings.DISCORD_CLIENT_ID) }}</span>
-            </div>
-            <div class="status-row">
-              <span class="status-label">配置状态:</span>
-              <el-tag :type="settings.DISCORD_ENABLED === 'true' && settings.DISCORD_TOKEN ? 'success' : 'info'" size="small">
-                {{ settings.DISCORD_ENABLED === 'true' ? '已启用' : '已禁用' }}
-              </el-tag>
-            </div>
-          </div>
-        </el-card>
-      </el-col>
-      <el-col :span="8">
-        <el-card shadow="hover" class="platform-card">
-          <template #header>
-            <div class="platform-header">
-              <el-icon size="20"><Cpu /></el-icon>
-              <span>OpenCode 服务</span>
-            </div>
-          </template>
-          <div class="platform-status">
-            <div class="status-row">
-              <span class="status-label">地址:</span>
-              <span class="status-value">{{ settings.OPENCODE_HOST || 'localhost' }}:{{ settings.OPENCODE_PORT || '4096' }}</span>
-            </div>
-            <div class="status-row">
-              <span class="status-label">自动启动:</span>
-              <el-tag :type="settings.OPENCODE_AUTO_START === 'true' ? 'success' : 'info'" size="small">
-                {{ settings.OPENCODE_AUTO_START === 'true' ? '启用' : '禁用' }}
-              </el-tag>
-            </div>
-          </div>
-        </el-card>
-      </el-col>
-    </el-row>
-
-    <!-- Cron 任务概览 -->
-    <el-card shadow="never" class="config-card">
+        <el-card shadow="never" class="config-card">
       <template #header>
         <div class="card-header-row">
           <span class="card-title">⏱️ Cron 任务概览</span>
@@ -213,7 +142,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import {
-  Monitor, Timer, DataLine, Clock, ChatDotRound, Connection, Cpu, Warning, DataAnalysis,
+  Monitor, Timer, DataLine, Clock, Warning,
   Refresh, Setting, CircleCheck, CircleClose
 } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
@@ -240,6 +169,10 @@ const healthChecks = ref<Record<string, HealthCheck>>({
   opencode: { status: 'unknown', message: '未检测' },
   feishu: { status: 'unknown', message: '未检测' },
   discord: { status: 'unknown', message: '未检测' },
+  wecom: { status: 'unknown', message: '未检测' },
+  telegram: { status: 'unknown', message: '未检测' },
+  qq: { status: 'unknown', message: '未检测' },
+  whatsapp: { status: 'unknown', message: '未检测' },
 })
 
 const dbStatus = computed(() => {
@@ -292,6 +225,10 @@ function getHealthName(key: string): string {
     opencode: 'OpenCode',
     feishu: '飞书',
     discord: 'Discord',
+    wecom: '企业微信',
+    telegram: 'Telegram',
+    qq: 'QQ',
+    whatsapp: 'WhatsApp',
   }
   return names[key] || key
 }
@@ -309,12 +246,6 @@ function formatStartTime(iso?: string): string {
   if (!iso) return '-'
   const d = new Date(iso)
   return d.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
-}
-
-function maskId(id?: string): string {
-  if (!id) return '-'
-  if (id.length <= 4) return '••••'
-  return `${id.slice(0, 4)}••••${id.slice(-4)}`
 }
 </script>
 
@@ -347,26 +278,6 @@ function maskId(id?: string): string {
 .stat-content { flex: 1; }
 .stat-label { font-size: 13px; color: #909399; margin-bottom: 4px; }
 .stat-value { font-size: 18px; font-weight: 600; color: #1a1a2e; }
-
-.platform-card { margin-bottom: 0; }
-.platform-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-weight: 600;
-  font-size: 15px;
-}
-.platform-status { padding: 8px 0; }
-.status-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 6px 0;
-  border-bottom: 1px dashed #eee;
-}
-.status-row:last-child { border-bottom: none; }
-.status-label { font-size: 13px; color: #909399; }
-.status-value { font-size: 13px; color: #1a1a2e; font-weight: 500; }
 
 .config-card { margin-bottom: 20px; }
 .card-title { font-weight: 600; font-size: 15px; }

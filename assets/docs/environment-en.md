@@ -1,6 +1,6 @@
 # Configuration Center
 
-> **v2.9.5-beta Architecture Change**: Business configuration parameters have been migrated to SQLite database storage, managed through Web visual panel. The `.env` file is only used for storing Admin panel startup parameters, no longer used as business configuration file.
+> **Architecture Change**: Business configuration parameters have been migrated to SQLite database storage, managed through Web visual panel. The `.env` file is only used for storing Admin panel startup parameters, no longer used as business configuration file.
 
 ## Configuration Management Methods
 
@@ -181,7 +181,7 @@ Based on actual reading from `src/config.ts` and `src/index.ts`:
 
 ### First Startup Migration
 
-On first startup of v2.9.5-beta, the system automatically executes:
+On first startup, the system automatically executes:
 
 1. Detects business configuration in `.env` file
 2. Writes configuration to SQLite database (`data/config.db`)

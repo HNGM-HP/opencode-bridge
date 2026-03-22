@@ -139,12 +139,12 @@ async function readPidFile(pidFilePath: string): Promise<number | null> {
     if (isErrnoException(error) && error.code === 'ENOENT') {
       if (!missingPidNoticePaths.has(pidFilePath)) {
         missingPidNoticePaths.add(pidFilePath);
-        console.info(`[process-check-job] bridge pid file not found, fallback to foreground mode detection: ${pidFilePath}`);
+        console.info(`[ProcessCheckJob] bridge pid file not found, fallback to foreground mode detection: ${pidFilePath}`);
       }
       return null;
     }
 
-    console.error('[process-check-job] readPidFile failed:', error instanceof Error ? error.message : String(error));
+    console.error('[ProcessCheckJob] readPidFile failed:', error instanceof Error ? error.message : String(error));
     return null;
   }
 }
@@ -276,7 +276,7 @@ export function createProcessCheckJobRunner(options: ProcessCheckJobRunnerOption
             },
           });
         } catch (error) {
-          console.error('[process-check-job] cleanupStaleLocks failed:', error instanceof Error ? error.message : String(error));
+          console.error('[ProcessCheckJob] cleanupStaleLocks failed:', error instanceof Error ? error.message : String(error));
           skippedPaths.push(lockPath);
         }
       }

@@ -38,7 +38,7 @@
 
       <div class="login-tip">
         <el-text size="small" type="info">
-          首次登录使用 .env 中的 ADMIN_PASSWORD，之后使用您设置的密码
+          首次登录请使用 .env 中的 ADMIN_PASSWORD，登录后需修改密码
         </el-text>
         <el-button
           v-if="hasOldToken"

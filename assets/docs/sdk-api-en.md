@@ -1,4 +1,4 @@
-# OpenCode SDK Integration Guide (Bridge Side, v2.9.5-beta)
+# OpenCode SDK Integration Guide (Bridge Side)
 
 This document is not a comprehensive SDK manual, but rather the actual encapsulation and call conventions used in `src/opencode/client.ts` of this project.
 

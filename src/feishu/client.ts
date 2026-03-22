@@ -394,6 +394,8 @@ class FeishuClient extends EventEmitter {
       appId: feishuConfig.appId,
       appSecret: feishuConfig.appSecret,
       disableTokenCache: false,
+      // 仅输出 error 及以上级别日志，避免未配置时输出大量 warn
+      loggerLevel: lark.LoggerLevel.error,
     });
 
     // 创建事件分发器

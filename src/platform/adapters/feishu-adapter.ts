@@ -127,13 +127,13 @@ export class FeishuAdapter implements PlatformAdapter {
   async start(): Promise<void> {
     // 检查飞书是否启用
     if (!feishuConfig.enabled) {
-      console.log('[Feishu] 飞书已禁用 (FEISHU_ENABLED=false)，跳过启动');
+      console.log('[飞书] 已禁用 (FEISHU_ENABLED=false)，跳过启动');
       return;
     }
     // 检查飞书配置是否完整
     if (!feishuConfig.appId || !feishuConfig.appSecret) {
-      console.log('[Feishu] 适配器未配置，跳过启动');
-      console.log('[Feishu] 如需启用飞书，请配置 FEISHU_APP_ID 和 FEISHU_APP_SECRET');
+      console.log('[飞书] 适配器未配置，跳过启动');
+      console.log('[飞书] 如需启用，请配置 FEISHU_APP_ID 和 FEISHU_APP_SECRET');
       return;
     }
     await feishuClient.start();

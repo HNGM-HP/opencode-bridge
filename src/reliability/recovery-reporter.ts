@@ -220,7 +220,7 @@ async function logAuditSafe(
       metadata: input.metadata,
     });
   } catch (error) {
-    console.error('[recovery-reporter] audit write failed:', error instanceof Error ? error.message : String(error));
+    console.error('[RecoveryReporter] audit write failed:', error instanceof Error ? error.message : String(error));
     // 审计日志失败不应影响主流程。
   }
 }

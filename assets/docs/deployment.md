@@ -106,7 +106,7 @@ opencode-bridge --config-dir ~/.config/opencode-bridge
 
 ### .env 文件（启动参数）
 
-v2.9.5-beta 版本后，`.env` 文件仅存储 Admin 面板的启动参数：
+当前版本，`.env` 文件仅存储 Admin 面板的启动参数：
 
 ```dotenv
 # Admin 面板端口（默认 4098）

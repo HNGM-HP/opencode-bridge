@@ -444,7 +444,7 @@ export class WeComHandler {
 
       await sender.sendText(chatId, lines.join('\n'));
     } catch (error) {
-      console.error('[WeCom] 获取会话列表失败:', error);
+      console.error('[企业微信] 获取会话列表失败:', error);
       await sender.sendText(chatId, '获取会话列表失败，请稍后重试');
     }
   }
@@ -581,7 +581,7 @@ export class WeComHandler {
         await sender.sendText(chatId, '撤回失败，请稍后重试');
       }
     } catch (error) {
-      console.error('[WeCom] 撤回失败:', error);
+      console.error('[企业微信] 撤回失败:', error);
       await sender.sendText(chatId, '撤回失败，请稍后重试');
     }
   }
@@ -618,7 +618,7 @@ export class WeComHandler {
         await sender.sendText(chatId, '压缩失败，请稍后重试');
       }
     } catch (error) {
-      console.error('[WeCom] 压缩失败:', error);
+      console.error('[企业微信] 压缩失败:', error);
       await sender.sendText(chatId, '压缩失败，请稍后重试');
     }
   }
@@ -688,7 +688,7 @@ export class WeComHandler {
 
       await sender.sendText(chatId, lines.join('\n'));
     } catch (error) {
-      console.error('[WeCom] 获取命令列表失败:', error);
+      console.error('[企业微信] 获取命令列表失败:', error);
       await sender.sendText(chatId, '获取命令列表失败，请稍后重试');
     }
   }
@@ -714,7 +714,7 @@ export class WeComHandler {
       await opencodeClient.sendMessageAsync(sessionId, fullCommand);
       await sender.sendText(chatId, `已发送命令: ${fullCommand}`);
     } catch (error) {
-      console.error('[WeCom] 透传命令失败:', error);
+      console.error('[企业微信] 透传命令失败:', error);
       await sender.sendText(chatId, '命令透传失败，请稍后重试');
     }
   }
@@ -825,7 +825,7 @@ export class WeComHandler {
       } catch (error) {
         lastError = error;
         console.error(
-          `[WeCom] 权限响应失败: session=${candidateSessionId}, permission=${pending.permissionId}`,
+          `[企业微信] 权限响应失败: session=${candidateSessionId}, permission=${pending.permissionId}`,
           error
         );
       }
@@ -833,7 +833,7 @@ export class WeComHandler {
 
     if (!responded) {
       console.error(
-        `[WeCom] 所有候选 session 权限响应失败: sessions=${candidateSessionIds.join(',')}`,
+        `[企业微信] 所有候选 session 权限响应失败: sessions=${candidateSessionIds.join(',')}`,
         lastError
       );
       const errorMessage = expiredDetected ? '操作已过期，请重新发起' : '权限响应失败，请稍后重试';
@@ -842,7 +842,7 @@ export class WeComHandler {
     }
 
     console.log(
-      `[WeCom] 权限响应成功: session=${respondedSessionId}, permission=${pending.permissionId}, allow=${decision.allow}, remember=${decision.remember}`
+      `[企业微信] 权限响应成功: session=${respondedSessionId}, permission=${pending.permissionId}, allow=${decision.allow}, remember=${decision.remember}`
     );
 
     permissionHandler.resolveForChat(queueKey, pending.permissionId);
@@ -1038,7 +1038,7 @@ export class WeComHandler {
       }
     }
 
-    console.log(`[WeCom] 提交问题回答: requestId=${pending.request.id.slice(0, 8)}...`);
+    console.log(`[企业微信] 提交问题回答: requestId=${pending.request.id.slice(0, 8)}...`);
 
     const result = await opencodeClient.replyQuestion(pending.request.id, answers);
 
@@ -1082,7 +1082,7 @@ export class WeComHandler {
     // 1. 优先处理命令
     const command = parseCommand(trimmed);
     if (command.type !== 'prompt') {
-      console.log(`[WeCom] 收到命令：${command.type}`);
+      console.log(`[企业微信] 收到命令：${command.type}`);
       await this.handleCommand(command, event, sender);
       return;
     }
@@ -1136,12 +1136,12 @@ export class WeComHandler {
     this.ensureStreamingBuffer(chatId, sessionId);
 
     if (!sender) {
-      console.error('[WeCom] 发送器为空，无法发送消息');
+      console.error('[企业微信] 发送器为空，无法发送消息');
       return;
     }
 
     try {
-      console.log(`[WeCom] 发送消息：chat=${chatId}, session=${sessionId.slice(0, 8)}...`);
+      console.log(`[企业微信] 发送消息：chat=${chatId}, session=${sessionId.slice(0, 8)}...`);
 
       const parts: OpencodePartInput[] = [];
 
@@ -1210,7 +1210,7 @@ export class WeComHandler {
 
     } catch (error) {
       const errorMessage = this.formatDispatchError(error);
-      console.error('[WeCom] 请求派发失败:', error);
+      console.error('[企业微信] 请求派发失败:', error);
 
       outputBuffer.append(bufferKey, `\n\n错误: ${errorMessage}`);
       outputBuffer.setStatus(bufferKey, 'failed');
@@ -1287,7 +1287,7 @@ export class WeComHandler {
         }
 
         if (!ext || !ALLOWED_ATTACHMENT_EXTENSIONS.has(ext)) {
-          console.log(`[WeCom] 不支持的附件格式: ext=${ext || 'unknown'}, contentType=${contentType}`);
+          console.log(`[企业微信] 不支持的附件格式: ext=${ext || 'unknown'}, contentType=${contentType}`);
           warnings.push(`附件格式不支持 (${ext || 'unknown'})，已跳过`);
           continue;
         }
@@ -1321,11 +1321,11 @@ export class WeComHandler {
         // 清理临时文件
         await fs.unlink(filePath).catch(() => {});
 
-        console.log(`[WeCom] 附件处理成功: ${safeName} (${Math.round(buffer.length / 1024)}KB)`);
+        console.log(`[企业微信] 附件处理成功: ${safeName} (${Math.round(buffer.length / 1024)}KB)`);
 
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
-        console.error(`[WeCom] 附件处理失败:`, error);
+        console.error(`[企业微信] 附件处理失败:`, error);
         warnings.push(`附件 ${attachment.fileName || '未知'} 处理失败: ${errorMessage}`);
       }
     }

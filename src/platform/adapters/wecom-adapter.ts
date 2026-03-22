@@ -46,7 +46,7 @@ class WeComSender implements PlatformSender {
   async sendText(conversationId: string, text: string): Promise<string | null> {
     const wsClient = this.adapter.getWsClient();
     if (!wsClient) {
-      console.warn('[WeCom] WSClient 未连接，无法发送文本消息');
+      console.warn('[企业微信] WSClient 未连接，无法发送文本消息');
       return null;
     }
 
@@ -67,7 +67,7 @@ class WeComSender implements PlatformSender {
       }
       return firstMessageId;
     } catch (error) {
-      console.error('[WeCom] 发送文本消息失败:', error);
+      console.error('[企业微信] 发送文本消息失败:', error);
       return null;
     }
   }
@@ -75,7 +75,7 @@ class WeComSender implements PlatformSender {
   async sendCard(conversationId: string, card: object): Promise<string | null> {
     const wsClient = this.adapter.getWsClient();
     if (!wsClient) {
-      console.warn('[WeCom] WSClient 未连接，无法发送卡片消息');
+      console.warn('[企业微信] WSClient 未连接，无法发送卡片消息');
       return null;
     }
 
@@ -100,7 +100,7 @@ class WeComSender implements PlatformSender {
       });
       return result?.headers?.req_id ?? null;
     } catch (error) {
-      console.error('[WeCom] 发送卡片消息失败:', error);
+      console.error('[企业微信] 发送卡片消息失败:', error);
       return null;
     }
   }
@@ -108,13 +108,13 @@ class WeComSender implements PlatformSender {
   async updateCard(messageId: string, card: object): Promise<boolean> {
     // 企业微信不支持直接更新消息，需要删除后重新发送
     // 这里暂时返回 false，表示不支持
-    console.warn('[WeCom] 不支持更新消息');
+    console.warn('[企业微信] 不支持更新消息');
     return false;
   }
 
   async deleteMessage(messageId: string): Promise<boolean> {
     // 企业微信不支持撤回消息
-    console.warn('[WeCom] 不支持删除消息');
+    console.warn('[企业微信] 不支持删除消息');
     return false;
   }
 
@@ -166,18 +166,18 @@ export class WeComAdapter implements PlatformAdapter {
   async start(): Promise<void> {
     // 检查企业微信是否启用
     if (!wecomConfig.enabled) {
-      console.log('[WeCom] 企业微信已禁用 (WECOM_ENABLED=false)，跳过启动');
+      console.log('[企业微信] 企业微信已禁用 (WECOM_ENABLED=false)，跳过启动');
       return;
     }
 
     // 检查企业微信配置是否完整
     if (!wecomConfig.botId || !wecomConfig.secret) {
-      console.log('[WeCom] 适配器未配置，跳过启动');
-      console.log('[WeCom] 如需启用企业微信，请配置 WECOM_BOT_ID 和 WECOM_SECRET');
+      console.log('[企业微信] 适配器未配置，跳过启动');
+      console.log('[企业微信] 如需启用企业微信，请配置 WECOM_BOT_ID 和 WECOM_SECRET');
       return;
     }
 
-    console.log('[WeCom] 正在连接企业微信 WebSocket...');
+    console.log('[企业微信] 正在连接企业微信 WebSocket...');
 
     // 创建 WSClient 实例
     this.wsClient = new WSClient({
@@ -185,10 +185,10 @@ export class WeComAdapter implements PlatformAdapter {
       secret: wecomConfig.secret,
       wsUrl: 'wss://openws.work.weixin.qq.com',
       logger: {
-        debug: (message: string, ...args: any[]) => console.debug(`[WeCom] ${message}`, ...args),
-        info: (message: string, ...args: any[]) => console.info(`[WeCom] ${message}`, ...args),
-        warn: (message: string, ...args: any[]) => console.warn(`[WeCom] ${message}`, ...args),
-        error: (message: string, ...args: any[]) => console.error(`[WeCom] ${message}`, ...args),
+        debug: (message: string, ...args: any[]) => console.debug(`[企业微信] ${message}`, ...args),
+        info: (message: string, ...args: any[]) => console.info(`[企业微信] ${message}`, ...args),
+        warn: (message: string, ...args: any[]) => console.warn(`[企业微信] ${message}`, ...args),
+        error: (message: string, ...args: any[]) => console.error(`[企业微信] ${message}`, ...args),
       },
       heartbeatInterval: 30000,
       maxReconnectAttempts: 5,
@@ -197,24 +197,24 @@ export class WeComAdapter implements PlatformAdapter {
 
     // 监听连接事件
     this.wsClient.on('connected', () => {
-      console.log('[WeCom] WebSocket 已连接');
+      console.log('[企业微信] WebSocket 已连接');
     });
 
     // 监听认证成功事件
     this.wsClient.on('authenticated', () => {
       this.isActive = true;
-      console.log('[WeCom] 认证成功');
+      console.log('[企业微信] 认证成功');
     });
 
     // 监听断开事件
     this.wsClient.on('disconnected', (reason) => {
-      console.log(`[WeCom] WebSocket 已断开：${reason}`);
+      console.log(`[企业微信] WebSocket 已断开：${reason}`);
       this.isActive = false;
     });
 
     // 监听错误事件
     this.wsClient.on('error', (error) => {
-      console.error('[WeCom] WebSocket 错误:', error);
+      console.error('[企业微信] WebSocket 错误:', error);
     });
 
     // 监听消息事件
@@ -224,7 +224,7 @@ export class WeComAdapter implements PlatformAdapter {
 
     // 连接 WebSocket
     this.wsClient.connect();
-    console.log('[WeCom] WebSocket 连接请求已发送，等待认证...');
+    console.log('[企业微信] WebSocket 连接请求已发送，等待认证...');
   }
 
   stop(): void {
@@ -232,7 +232,7 @@ export class WeComAdapter implements PlatformAdapter {
       this.wsClient.disconnect();
       this.wsClient = null;
       this.isActive = false;
-      console.log('[WeCom] 适配器已停止');
+      console.log('[企业微信] 适配器已停止');
     }
   }
 
@@ -260,7 +260,7 @@ export class WeComAdapter implements PlatformAdapter {
 
     // 跳过空消息
     if (!text && (!attachments || attachments.length === 0)) {
-      console.log('[WeCom] 跳过空消息');
+      console.log('[企业微信] 跳过空消息');
       return;
     }
 
@@ -283,7 +283,7 @@ export class WeComAdapter implements PlatformAdapter {
       try {
         await Promise.resolve(callback(event));
       } catch (error) {
-        console.error('[WeCom] 消息回调执行失败:', error);
+        console.error('[企业微信] 消息回调执行失败:', error);
       }
     }
   }

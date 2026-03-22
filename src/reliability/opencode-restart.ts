@@ -187,9 +187,11 @@ function isNoSuchProcessError(error: unknown): boolean {
 async function defaultStartProcess(): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     try {
+      const isWindows = process.platform === 'win32';
       const child = spawn('opencode', [], {
         detached: true,
         stdio: 'ignore',
+        shell: isWindows,
       });
       child.unref();
       setTimeout(() => resolve(), 500);

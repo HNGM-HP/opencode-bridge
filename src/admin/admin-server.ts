@@ -578,9 +578,11 @@ export function createAdminServer(options: AdminServerOptions): { start: () => v
       fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
 
       // 启动 OpenCode
+      const isWindows = process.platform === 'win32';
       spawn('opencode', [], {
         detached: true,
         stdio: 'ignore',
+        shell: isWindows,
       });
 
       res.json({ ok: true, message: 'OpenCode 已启动' });
@@ -658,13 +660,12 @@ export function createAdminServer(options: AdminServerOptions): { start: () => v
     // 检测飞书配置
     try {
       const settings = configStore.get();
-      const feishuEnabled = settings.FEISHU_ENABLED !== 'false'; // 默认启用，只有显式设为 false 才禁用
-      if (!feishuEnabled) {
-        health.checks.feishu = { status: 'warning', message: '飞书已禁用 (FEISHU_ENABLED=false)' };
-      } else if (settings.FEISHU_APP_ID && settings.FEISHU_APP_SECRET) {
+      if (settings.FEISHU_ENABLED === 'true' && settings.FEISHU_APP_ID && settings.FEISHU_APP_SECRET) {
         health.checks.feishu = { status: 'ok', message: '飞书凭据已配置' };
+      } else if (settings.FEISHU_ENABLED === 'true') {
+        health.checks.feishu = { status: 'warning', message: '飞书已启用但凭据未配置' };
       } else {
-        health.checks.feishu = { status: 'warning', message: '飞书凭据未配置' };
+        health.checks.feishu = { status: 'ok', message: '飞书未启用' };
       }
     } catch (e: any) {
       health.checks.feishu = { status: 'error', message: e.message };
