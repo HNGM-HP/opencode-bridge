@@ -59,6 +59,108 @@ function isUniversalCardBuildFailure(responseData: unknown): boolean {
     || text.includes('create universal card fail');
 }
 
+// 检查是否为 completion 对象未找到错误（230001）
+export function isCompletionNotFoundError(responseData: unknown): boolean {
+  const apiCode = extractApiCode(responseData);
+  return apiCode === 230001;
+}
+
+// 检查是否为可重试的错误（网络错误、5xx 服务端错误）
+function isRetryableError(error: unknown): boolean {
+  if (!error) return false;
+
+  // 网络错误（无响应）
+  if (error instanceof Error) {
+    const message = error.message.toLowerCase();
+    if (
+      message.includes('econnrefused') ||
+      message.includes('econnreset') ||
+      message.includes('etimedout') ||
+      message.includes('enotfound') ||
+      message.includes('network') ||
+      message.includes('timeout')
+    ) {
+      return true;
+    }
+  }
+
+  // 检查 HTTP 状态码
+  const record = error as Record<string, unknown>;
+  const statusCode =
+    typeof record.code === 'number' ? record.code :
+    typeof (error as { response?: { status?: number } }).response?.status === 'number'
+      ? (error as { response: { status: number } }).response.status
+      : undefined;
+
+  if (statusCode && statusCode >= 500 && statusCode < 600) {
+    return true;
+  }
+
+  // 检查 responseData 中的 code
+  const responseData = typeof record.response === 'object' && record.response !== null
+    ? (record.response as Record<string, unknown>).data
+    : undefined;
+  const apiCode = extractApiCode(responseData);
+  if (apiCode && apiCode >= 500000 && apiCode < 600000) {
+    return true;
+  }
+
+  return false;
+}
+
+// 重试配置
+interface RetryOptions {
+  maxAttempts: number;
+  baseDelayMs: number;
+  maxDelayMs: number;
+}
+
+const DEFAULT_RETRY_OPTIONS: RetryOptions = {
+  maxAttempts: 3,
+  baseDelayMs: 500,
+  maxDelayMs: 5000,
+};
+
+// 通用重试工具函数
+async function withRetry<T>(
+  fn: () => Promise<T>,
+  options: RetryOptions = DEFAULT_RETRY_OPTIONS
+): Promise<T> {
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt < options.maxAttempts; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error;
+
+      // 最后一次尝试不再等待
+      if (attempt === options.maxAttempts - 1) {
+        break;
+      }
+
+      // 只对可重试的错误进行重试
+      if (!isRetryableError(error)) {
+        break;
+      }
+
+      // 指数退避
+      const delay = Math.min(
+        options.baseDelayMs * Math.pow(2, attempt),
+        options.maxDelayMs
+      );
+
+      console.warn(`[飞书] 操作失败，${delay}ms 后重试（第 ${attempt + 1}/${options.maxAttempts} 次）`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+
+  throw lastError;
+}
+
+// 连接状态类型
+type ConnectionState = 'disconnected' | 'connecting' | 'connected';
+
 function buildFallbackInteractiveCard(sourceCard: object): object {
   const cardRecord = sourceCard as {
     header?: {
@@ -278,12 +380,22 @@ class FeishuClient extends EventEmitter {
   private cardActionHandler?: (event: FeishuCardActionEvent) => Promise<FeishuCardActionResponse | void>;
   private cardUpdateQueue: Map<string, Promise<boolean>> = new Map();
 
+  // 连接状态和心跳检测
+  private connectionState: ConnectionState = 'disconnected';
+  private heartbeatTimer: NodeJS.Timeout | null = null;
+  private lastHeartbeatAt: number = 0;
+  private heartbeatFailureCount: number = 0;
+  private readonly HEARTBEAT_INTERVAL_MS = 30000; // 30秒
+  private readonly HEARTBEAT_FAILURE_THRESHOLD = 3; // 连续失败3次认为断连
+
   constructor() {
     super();
     this.client = new lark.Client({
       appId: feishuConfig.appId,
       appSecret: feishuConfig.appSecret,
       disableTokenCache: false,
+      // 仅输出 error 及以上级别日志，避免未配置时输出大量 warn
+      loggerLevel: lark.LoggerLevel.error,
     });
 
     // 创建事件分发器
@@ -293,9 +405,73 @@ class FeishuClient extends EventEmitter {
     });
   }
 
+  // 获取当前连接状态
+  getConnectionState(): ConnectionState {
+    return this.connectionState;
+  }
+
+  // 获取上次心跳时间
+  getLastHeartbeatAt(): number {
+    return this.lastHeartbeatAt;
+  }
+
+  // 启动心跳检测
+  private startHeartbeat(): void {
+    if (this.heartbeatTimer) {
+      return;
+    }
+
+    this.heartbeatTimer = setInterval(async () => {
+      await this.performHeartbeat();
+    }, this.HEARTBEAT_INTERVAL_MS);
+
+    console.log('[飞书] 心跳检测已启动');
+  }
+
+  // 停止心跳检测
+  private stopHeartbeat(): void {
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
+    console.log('[飞书] 心跳检测已停止');
+  }
+
+  // 执行心跳检测
+  private async performHeartbeat(): Promise<void> {
+    try {
+      // 调用 chat.list 接口验证 API 连接（轻量级只读操作）
+      await this.client.im.chat.list({
+        params: { page_size: 1 },
+      });
+      this.lastHeartbeatAt = Date.now();
+      this.heartbeatFailureCount = 0;
+
+      // 如果之前是断连状态，现在恢复了
+      if (this.connectionState !== 'connected') {
+        this.connectionState = 'connected';
+        console.log('[飞书] 连接已恢复');
+        this.emit('connectionRestored');
+      }
+    } catch (error) {
+      this.heartbeatFailureCount++;
+      console.warn(`[飞书] 心跳检测失败（第 ${this.heartbeatFailureCount} 次）: ${error instanceof Error ? error.message : String(error)}`);
+
+      // 连续失败超过阈值，认为断连
+      if (this.heartbeatFailureCount >= this.HEARTBEAT_FAILURE_THRESHOLD) {
+        if (this.connectionState === 'connected') {
+          this.connectionState = 'disconnected';
+          console.error('[飞书] 连接已断开');
+          this.emit('connectionLost');
+        }
+      }
+    }
+  }
+
   // 启动长连接
   async start(): Promise<void> {
     console.log('[飞书] 正在启动长连接...');
+    this.connectionState = 'connecting';
 
     // 注册消息接收事件
     this.eventDispatcher.register({
@@ -325,7 +501,11 @@ class FeishuClient extends EventEmitter {
 
     // 启动连接
     await this.wsClient.start({ eventDispatcher: this.eventDispatcher });
+    this.connectionState = 'connected';
     console.log('[飞书] 长连接已建立');
+
+    // 启动心跳检测
+    this.startHeartbeat();
   }
 
   // 监听群成员退群事件
@@ -538,7 +718,8 @@ class FeishuClient extends EventEmitter {
       return { msg: 'ok' };
     } catch (error) {
       console.error('[飞书] 解析卡片事件失败:', error);
-      return { msg: 'ok' };
+      // 返回错误提示，但仍返回 200 避免飞书重试
+      return { msg: 'ok', error: '卡片事件处理失败，请稍后重试' };
     }
   }
 
@@ -567,14 +748,17 @@ class FeishuClient extends EventEmitter {
   // 发送文本消息
   async sendText(chatId: string, text: string): Promise<string | null> {
     try {
-      const response = await this.client.im.message.create({
-        params: { receive_id_type: 'chat_id' },
-        data: {
-          receive_id: chatId,
-          msg_type: 'text',
-          content: JSON.stringify({ text }),
-        },
-      });
+      const response = await withRetry(
+        () => this.client.im.message.create({
+          params: { receive_id_type: 'chat_id' },
+          data: {
+            receive_id: chatId,
+            msg_type: 'text',
+            content: JSON.stringify({ text }),
+          },
+        }),
+        { maxAttempts: 3, baseDelayMs: 500, maxDelayMs: 3000 }
+      );
 
       const msgId = response.data?.message_id || null;
       if (msgId) {
@@ -600,13 +784,16 @@ class FeishuClient extends EventEmitter {
   // 回复消息
   async reply(messageId: string, text: string): Promise<string | null> {
     try {
-      const response = await this.client.im.message.reply({
-        path: { message_id: messageId },
-        data: {
-          msg_type: 'text',
-          content: JSON.stringify({ text }),
-        },
-      });
+      const response = await withRetry(
+        () => this.client.im.message.reply({
+          path: { message_id: messageId },
+          data: {
+            msg_type: 'text',
+            content: JSON.stringify({ text }),
+          },
+        }),
+        { maxAttempts: 3, baseDelayMs: 500, maxDelayMs: 3000 }
+      );
 
       const msgId = response.data?.message_id || null;
       if (msgId) {
@@ -626,13 +813,16 @@ class FeishuClient extends EventEmitter {
   // 回复卡片
   async replyCard(messageId: string, card: object): Promise<string | null> {
     try {
-      const response = await this.client.im.message.reply({
-        path: { message_id: messageId },
-        data: {
-          msg_type: 'interactive',
-          content: JSON.stringify(card),
-        },
-      });
+      const response = await withRetry(
+        () => this.client.im.message.reply({
+          path: { message_id: messageId },
+          data: {
+            msg_type: 'interactive',
+            content: JSON.stringify(card),
+          },
+        }),
+        { maxAttempts: 3, baseDelayMs: 500, maxDelayMs: 3000 }
+      );
 
       const msgId = response.data?.message_id || null;
       if (msgId) {
@@ -673,10 +863,13 @@ class FeishuClient extends EventEmitter {
         msg_type: 'interactive',
         content: JSON.stringify(card),
       } as unknown as { content: string };
-      await this.client.im.message.patch({
-        path: { message_id: messageId },
-        data,
-      });
+      await withRetry(
+        () => this.client.im.message.patch({
+          path: { message_id: messageId },
+          data,
+        }),
+        { maxAttempts: 3, baseDelayMs: 500, maxDelayMs: 3000 }
+      );
       console.log(`[飞书] 更新卡片成功: msgId=${messageId.slice(0, 16)}...`);
       return true;
     } catch (error) {
@@ -735,14 +928,17 @@ class FeishuClient extends EventEmitter {
   // 发送消息卡片
   async sendCard(chatId: string, card: object): Promise<string | null> {
     try {
-      const response = await this.client.im.message.create({
-        params: { receive_id_type: 'chat_id' },
-        data: {
-          receive_id: chatId,
-          msg_type: 'interactive',
-          content: JSON.stringify(card),
-        },
-      });
+      const response = await withRetry(
+        () => this.client.im.message.create({
+          params: { receive_id_type: 'chat_id' },
+          data: {
+            receive_id: chatId,
+            msg_type: 'interactive',
+            content: JSON.stringify(card),
+          },
+        }),
+        { maxAttempts: 3, baseDelayMs: 500, maxDelayMs: 3000 }
+      );
 
       const msgId = response.data?.message_id || null;
       if (msgId) {
@@ -1105,10 +1301,12 @@ class FeishuClient extends EventEmitter {
 
   // 停止长连接
   stop(): void {
+    this.stopHeartbeat();
     if (this.wsClient) {
       this.wsClient.close();
       this.wsClient = null;
     }
+    this.connectionState = 'disconnected';
     console.log('[飞书] 已断开连接');
   }
 }

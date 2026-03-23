@@ -312,7 +312,7 @@ describe('DiscordHandler permission text flow', () => {
 
     const sender = makeSender();
     const handler = createDiscordHandler(sender);
-    const replyQuestionSpy = vi.spyOn(opencodeClient, 'replyQuestion').mockResolvedValue(true);
+    const replyQuestionSpy = vi.spyOn(opencodeClient, 'replyQuestion').mockResolvedValue({ ok: true });
 
     await handler.handleMessage(makeEvent('深度'));
 
@@ -351,7 +351,7 @@ describe('DiscordHandler permission text flow', () => {
 
     const sender = makeSender();
     const handler = createDiscordHandler(sender);
-    const replyQuestionSpy = vi.spyOn(opencodeClient, 'replyQuestion').mockResolvedValue(true);
+    const replyQuestionSpy = vi.spyOn(opencodeClient, 'replyQuestion').mockResolvedValue({ ok: true });
 
     await handler.handleMessage(makeEvent('测试'));
 

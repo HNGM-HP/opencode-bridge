@@ -6,6 +6,7 @@ import { chatSessionStore } from '../store/chat-session.js';
 import { outputBuffer } from '../opencode/output-buffer.js';
 import { commandHandler } from './command.js';
 import type { FeishuCardActionEvent } from '../feishu/client.js';
+import { isCompletionNotFoundError } from '../feishu/client.js';
 
 export class CardActionHandler {
   private extractSelectedOption(value: unknown): string | undefined {
@@ -74,10 +75,22 @@ export class CardActionHandler {
     const session = chatId ? chatSessionStore.getSession(chatId) : null;
     if (session?.sessionId) {
       try {
-        await opencodeClient.abortSession(session.sessionId);
-        console.log(`[CardAction] 已中断会话: ${session.sessionId}`);
+        const aborted = await opencodeClient.abortSession(session.sessionId);
+        if (aborted) {
+          console.log(`[CardAction] 已中断会话: ${session.sessionId}`);
+        } else {
+          console.log(`[CardAction] 会话可能已结束: ${session.sessionId}`);
+        }
       } catch (e) {
-        console.error('[CardAction] 中断会话失败:', e);
+        // 检查是否为过期操作
+        const errorData = typeof e === 'object' && e !== null && 'response' in e
+          ? (e as { response?: { data?: unknown } }).response?.data
+          : undefined;
+        if (isCompletionNotFoundError(errorData)) {
+          console.log(`[CardAction] 会话已过期: ${session.sessionId}`);
+        } else {
+          console.error('[CardAction] 中断会话失败:', e);
+        }
       }
     }
 
@@ -105,6 +118,19 @@ export class CardActionHandler {
       };
     } catch (error) {
       console.error('[CardAction] Undo failed:', error);
+      // 检查是否为过期操作
+      const errorData = typeof error === 'object' && error !== null && 'response' in error
+        ? (error as { response?: { data?: unknown } }).response?.data
+        : undefined;
+      if (isCompletionNotFoundError(errorData)) {
+        return {
+          toast: {
+            type: 'error',
+            content: '操作已过期，请重新发起',
+            i18n_content: { zh_cn: '操作已过期，请重新发起', en_us: 'Operation expired, please try again' }
+          }
+        };
+      }
       return {
         toast: {
           type: 'error',

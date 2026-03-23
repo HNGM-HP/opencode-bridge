@@ -6,7 +6,7 @@
  * 功能:
  * - 调用 process-manager.mjs 清理旧进程
  * - 构建项目（如果需要）
- * - 启动 Bridge 服务
+ * - 启动 Admin 服务（Admin 会自动启动 Bridge 子进程）
  */
 
 import fs from 'node:fs';
@@ -22,7 +22,7 @@ const logsDir = path.join(rootDir, 'logs');
 const pidFile = path.join(logsDir, 'bridge.pid');
 const outLog = path.join(logsDir, 'service.log');
 const errLog = path.join(logsDir, 'service.err');
-const entryFile = path.join(rootDir, 'dist', 'index.js');
+const adminEntryFile = path.join(rootDir, 'dist', 'admin', 'index.js');
 const processManagerPath = path.join(rootDir, 'scripts', 'process-manager.mjs');
 
 function isWindows() {
@@ -70,6 +70,7 @@ function runNpm(args) {
     const result = spawnSync(variant.command, variant.args, {
       cwd: rootDir,
       stdio: 'inherit',
+      windowsHide: isWindows(),
     });
 
     if (result.error) {
@@ -92,12 +93,23 @@ function ensureLogDir() {
 }
 
 function ensureBuildIfMissing() {
-  if (fs.existsSync(entryFile)) {
+  const webEntryFile = path.join(rootDir, 'dist', 'public', 'index.html');
+  const backendMissing = !fs.existsSync(adminEntryFile);
+  const frontendMissing = !fs.existsSync(webEntryFile);
+
+  if (!backendMissing && !frontendMissing) {
     return;
   }
 
-  console.log('[start] 未检测到 dist/index.js，开始自动构建');
-  const result = runNpm(['run', 'build']);
+  if (backendMissing && frontendMissing) {
+    console.log('[start] 未检测到构建产物，开始自动全量构建');
+  } else if (backendMissing) {
+    console.log('[start] 未检测到 dist/admin/index.js，开始自动构建');
+  } else {
+    console.log('[start] 未检测到 dist/public/index.html，开始自动构建前端控制台');
+  }
+
+  const result = runNpm(['run', 'build:all']);
 
   if (!result || result.error || result.status !== 0) {
     console.error('[start] 构建失败，启动中止');
@@ -105,11 +117,11 @@ function ensureBuildIfMissing() {
   }
 }
 
-function startBridge() {
+function startAdmin() {
   const stdoutFd = fs.openSync(outLog, 'a');
   const stderrFd = fs.openSync(errLog, 'a');
 
-  const child = spawn(process.execPath, ['dist/index.js'], {
+  const child = spawn(process.execPath, [adminEntryFile], {
     cwd: rootDir,
     detached: true,
     stdio: ['ignore', stdoutFd, stderrFd],
@@ -140,6 +152,7 @@ function main() {
   const cleanupResult = spawnSync(process.execPath, [processManagerPath, 'kill-bridge'], {
     stdio: 'pipe',
     encoding: 'utf-8',
+    windowsHide: isWindows(),
   });
 
   if (cleanupResult.stdout) {
@@ -155,8 +168,8 @@ function main() {
 
   ensureBuildIfMissing();
 
-  // 3. 启动 Bridge 服务
-  startBridge();
+  // 3. 启动 Admin 服务（Admin 会自动启动 Bridge 子进程）
+  startAdmin();
 }
 
 main();

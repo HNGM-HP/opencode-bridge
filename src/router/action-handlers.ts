@@ -181,21 +181,25 @@ export function createPermissionActionCallbacks(
     let responded = false;
     let respondedSessionId = sessionId;
     let lastError: unknown;
+    let expiredDetected = false;
 
     for (const candidateSessionId of candidateSessionIds) {
       const permissionDirectoryOptions = resolvePermissionDirectoryOptions(candidateSessionId);
       try {
-        const ok = await opencodeClient.respondToPermission(
+        const result = await opencodeClient.respondToPermission(
           candidateSessionId,
           permissionId,
           allow,
           remember,
           permissionDirectoryOptions
         );
-        if (ok) {
+        if (result.ok) {
           responded = true;
           respondedSessionId = candidateSessionId;
           break;
+        }
+        if (result.expired) {
+          expiredDetected = true;
         }
       } catch (error) {
         lastError = error;
@@ -205,6 +209,16 @@ export function createPermissionActionCallbacks(
 
     if (!responded) {
       console.error(`[权限] 所有候选 session 响应失败: sessions=${candidateSessionIds.join(',')}, permission=${permissionId}`, lastError);
+      // 如果检测到过期，返回友好提示
+      if (expiredDetected) {
+        return {
+          toast: {
+            type: 'error',
+            content: '操作已过期，请重新发起',
+            i18n_content: { zh_cn: '操作已过期，请重新发起', en_us: 'Operation expired, please try again' },
+          },
+        };
+      }
       return {
         toast: {
           type: 'error',
@@ -274,21 +288,25 @@ export function createPermissionActionCallbacks(
     let responded = false;
     let respondedSessionId = pending.sessionId;
     let lastError: unknown;
+    let expiredDetected = false;
 
     for (const candidateSessionId of candidateSessionIds) {
       const permissionDirectoryOptions = resolvePermissionDirectoryOptions(candidateSessionId, event.chatId);
       try {
-        const ok = await opencodeClient.respondToPermission(
+        const result = await opencodeClient.respondToPermission(
           candidateSessionId,
           pending.permissionId,
           decision.allow,
           decision.remember,
           permissionDirectoryOptions
         );
-        if (ok) {
+        if (result.ok) {
           responded = true;
           respondedSessionId = candidateSessionId;
           break;
+        }
+        if (result.expired) {
+          expiredDetected = true;
         }
       } catch (error) {
         lastError = error;
@@ -298,6 +316,11 @@ export function createPermissionActionCallbacks(
 
     if (!responded) {
       console.error(`[权限] 所有候选 session 文本响应失败: chat=${event.chatId}, sessions=${candidateSessionIds.join(',')}`, lastError);
+      // 如果检测到过期，返回友好提示
+      if (expiredDetected) {
+        await feishuClient.reply(event.messageId, '操作已过期，请重新发起');
+        return true;
+      }
       await feishuClient.reply(event.messageId, '权限响应失败，请重试');
       return true;
     }

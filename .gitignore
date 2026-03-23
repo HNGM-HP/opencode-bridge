@@ -7,6 +7,14 @@ dist/
 # 环境变量和敏感配置
 .env
 *.env.local
+.env.backup
+
+# SQLite 配置数据库（含敏感凭证，不入库）
+data/config.db
+data/
+
+# 前端依赖
+web/node_modules/
 
 # 日志文件
 logs/
@@ -15,6 +23,7 @@ logs/
 # 会话数据（用户隐私）
 .session-*.json
 .chat-sessions.json
+.user-sessions.json
 
 # 编辑器配置
 .vscode/
@@ -50,5 +59,6 @@ HEARTBEAT.md
 PLAN.md
 PLAN_*.md
 
-data/
-.env.backup
+# 本地开发包和临时组件
+package/
+*.tgz

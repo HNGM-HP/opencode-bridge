@@ -1,18 +1,25 @@
-# OpenCode SDK Integration Guide (Bridge Side, v2.9.1)
+# OpenCode SDK Integration Guide
 
-This document is not a comprehensive SDK manual, but rather the actual encapsulation and call conventions used in `src/opencode/client.ts` of this project.
+**Version**: v2.9.5-beta
+**Last Updated**: 2026-03-23
+
+---
 
 ## 1. Integration Principles
 
-- Bridge stability first: unified error handling, unified logging, unified retry strategy.
-- Sessions, messages, permissions, and questions are all exposed through `OpencodeClientWrapper`; do not call underlying SDK directly at business layer.
-- Platform layer only cares about business results, not SDK details.
+| Principle | Description |
+|-----------|-------------|
+| **Bridge stability first** | Unified error handling, logging, and retry strategy |
+| **Unified interface** | Sessions, messages, permissions, and questions all exposed through `OpencodeClientWrapper` |
+| **Abstraction** | Business layer never calls underlying SDK directly |
+
+---
 
 ## 2. Key Types
 
-### 2.1 Permission Event
+### Permission Event
 
-```ts
+```typescript
 interface PermissionRequestEvent {
   sessionId: string;
   permissionId: string;
@@ -26,100 +33,116 @@ interface PermissionRequestEvent {
 }
 ```
 
-### 2.2 Permission Response Options
+### Permission Response Options
 
-```ts
+```typescript
 interface PermissionResponseOptions {
   directory?: string;
   fallbackDirectories?: string[];
 }
 ```
 
-Purpose: Directory switch permission response prioritizes hitting current directory instance, then falls back by candidate directory.
+Used for directory-aware permission responses with fallback candidates.
 
-## 3. Encapsulated Methods Summary
+---
 
-### 3.1 Connection & Events
+## 3. API Overview
 
-- `connect()`: Initialize SDK client and verify availability.
-- `disconnect()`: Close event stream and reconnection timer.
-- `startEventListener()`: Start global event subscription.
-- `_createDirectoryEventStream()`: Directory-level event stream (established on demand).
+### Connection & Events
 
-### 3.2 Sessions & Projects
+| Method | Description |
+|--------|-------------|
+| `connect()` | Initialize SDK client and verify availability |
+| `disconnect()` | Close event stream and reconnect timer |
+| `startEventListener()` | Start global event subscription |
 
-- `listProjects(directory?)`
-- `listSessions(directory?)`
-- `listSessionsAcrossProjects()`
-- `findSessionAcrossProjects(sessionId)`
-- `createSession(title?, directory?)`
-- `updateSession(sessionId, title)`
-- `deleteSession(sessionId, directory?)`
-- `getSessionById(sessionId)`
-- `getSessionMessages(sessionId)`
+### Sessions & Projects
 
-### 3.3 Messages & Commands
+| Method | Description |
+|--------|-------------|
+| `listProjects(directory?)` | List projects |
+| `listSessions(directory?)` | List sessions |
+| `createSession(title?, directory?)` | Create new session |
+| `updateSession(sessionId, title)` | Update session title |
+| `deleteSession(sessionId, directory?)` | Delete session |
+| `getSessionById(sessionId)` | Get session by ID |
 
-- `sendMessage(sessionId, text, options)`
-- `sendMessageAsync(sessionId, text, options)`
-- `sendMessageParts(sessionId, parts, options)`
-- `sendMessagePartsAsync(sessionId, parts, options)`
-- `sendCommand(sessionId, command, args?)`
-- `sendShellCommand(sessionId, command, options)`
+### Messages & Commands
 
-### 3.4 Permissions & Questions
+| Method | Description |
+|--------|-------------|
+| `sendMessage(sessionId, text, options)` | Send message |
+| `sendMessageAsync(sessionId, text, options)` | Send message (async) |
+| `sendCommand(sessionId, command, args?)` | Send command |
+| `sendShellCommand(sessionId, command, options)` | Send shell command |
 
-- `respondToPermission(sessionId, permissionId, allow, remember?, options?)`
-- `replyQuestion(sessionId, questionId, answers)`
-- `rejectQuestion(sessionId, questionId)`
+### Permissions & Questions
 
-### 3.5 Session Control
+| Method | Description |
+|--------|-------------|
+| `respondToPermission(sessionId, permissionId, allow, remember?, options?)` | Respond to permission |
+| `replyQuestion(sessionId, questionId, answers)` | Reply to question |
+| `rejectQuestion(sessionId, questionId)` | Reject question |
 
-- `abortSession(sessionId)`
-- `revertMessage(sessionId, messageId)`
-- `summarizeSession(sessionId, providerId, modelId)`
+### Session Control
 
-### 3.6 Configuration & Metadata
+| Method | Description |
+|--------|-------------|
+| `abortSession(sessionId)` | Abort session |
+| `revertMessage(sessionId, messageId)` | Revert message |
+| `summarizeSession(sessionId, providerId, modelId)` | Summarize session |
 
-- `getProviders()`
-- `getConfig()`
-- `updateConfig(body)`
-- `getAgents()`
+---
 
-## 4. Permission Response Directory Strategy (Key Point)
+## 4. Directory-Aware Permission Response
 
-`respondToPermission(...)` current implementation has the following behavior:
+The `respondToPermission()` method supports directory-aware responses:
 
-1. Allows passing `directory` and `fallbackDirectories`.
-2. Tries each candidate directory:
-   - Returns success on hit;
-   - Records failure in log and continues to next candidate;
-3. Finally falls back to default directory instance (without `directory` query).
+```typescript
+await opencodeClient.respondToPermission(sessionId, permissionId, true, false, {
+  directory: resolvedDirectory,
+  fallbackDirectories: knownDirectories,
+});
+```
 
-This significantly reduces the problem of "switching working directory, permission allow log printed, but task still stuck".
+### Behavior
 
-## 5. Event Distribution Conventions
+1. Try each directory candidate in order
+2. Return success on first hit
+3. Log failure and continue to next candidate
+4. Finally fallback to default directory instance
 
-Bridge side consumes SDK events through `OpenCodeEventHub`; key events include:
+This significantly reduces "permission allowed in logs but task still stuck" issues.
 
-- `permissionRequest`
-- `questionAsked`
-- `messagePartUpdated`
-- `messageUpdated`
-- `sessionStatus`
-- `sessionIdle`
-- `sessionError`
+---
 
-Recommended practices:
+## 5. Event Dispatch
 
-- Only do routing and state changes at event layer; do not do platform UI assembly.
-- UI-related rendering is handled by Feishu/Discord rendering layers separately.
+Events are consumed through `OpenCodeEventHub`:
 
-## 6. Common Call Templates
+| Event | Description |
+|-------|-------------|
+| `permissionRequest` | Permission request received |
+| `questionAsked` | Question received |
+| `messagePartUpdated` | Message part updated |
+| `messageUpdated` | Message updated |
+| `sessionStatus` | Session status changed |
+| `sessionIdle` | Session became idle |
+| `sessionError` | Session error occurred |
 
-### 6.1 Send Message (with Directory and Model)
+### Best Practices
 
-```ts
+- Only route and update state in event layer
+- Don't assemble platform UI in event handlers
+- Let each platform's renderer handle UI
+
+---
+
+## 6. Common Patterns
+
+### Send Message with Options
+
+```typescript
 await opencodeClient.sendMessage(sessionId, prompt, {
   providerId,
   modelId,
@@ -129,30 +152,46 @@ await opencodeClient.sendMessage(sessionId, prompt, {
 });
 ```
 
-### 6.2 Response Permission (Directory Aware)
+### Respond to Permission with Directory
 
-```ts
+```typescript
 await opencodeClient.respondToPermission(sessionId, permissionId, true, false, {
   directory: resolvedDirectory,
   fallbackDirectories: knownDirectories,
 });
 ```
 
-### 6.3 Reply Question
+### Reply to Question
 
-```ts
+```typescript
 await opencodeClient.replyQuestion(sessionId, requestId, answers);
 ```
 
-## 7. Troubleshooting Checklist
+---
 
-- 401/403: First verify `OPENCODE_SERVER_USERNAME` / `OPENCODE_SERVER_PASSWORD`.
-- Session not found: Check if `sessionId` is cross-directory, try `findSessionAcrossProjects`.
-- Permission stuck: Check if permission response carries directory candidates.
-- Streaming no output: Check if event listener is started, if OutputBuffer triggers updates.
+## 7. Troubleshooting
 
-## 8. Upgrade Recommendations
+| Issue | Check |
+|-------|-------|
+| 401/403 | Verify `OPENCODE_SERVER_USERNAME`/`OPENCODE_SERVER_PASSWORD` |
+| Session not found | Check if `sessionId` crosses directories; try `findSessionAcrossProjects` |
+| Permission stuck | Check if permission response includes directory candidates |
+| No streaming output | Check if event listener started; check OutputBuffer triggers |
 
-- Before upgrading SDK, run full test suite and observe `PermissionRequestEvent` field compatibility.
-- Keep bridge encapsulation layer stable; avoid business layer directly coupling to SDK raw fields.
-- Any permission/directory related changes require regression tests.
+---
+
+## 8. Upgrade Notes
+
+- Run full tests before SDK upgrade
+- Monitor `PermissionRequestEvent` field compatibility
+- Keep bridge wrapper stable
+- Avoid business layer coupling to raw SDK fields
+- Add regression tests for any permission/directory changes
+
+---
+
+## 9. Related Documentation
+
+- [Architecture](architecture-en.md) - OpenCode integration layer
+- [Implementation Details](implementation-en.md) - Key implementation patterns
+- [Troubleshooting Guide](troubleshooting-en.md) - Common SDK issues

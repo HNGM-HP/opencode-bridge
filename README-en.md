@@ -1,342 +1,154 @@
-# Feishu / Discord × OpenCode Bridge Service v2.9.1
+# OpenCode Bridge
 
-[![v2.9.1](https://img.shields.io/badge/v2.9.1-3178C6)]()
+[![v2.9.5](https://img.shields.io/badge/v2.9.5-3178C6)]()
 [![Node.js >= 18](https://img.shields.io/badge/Node.js-%3E%3D18-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![License: GPLv3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 
-**[中文](README.md)** | **[English](README-en.md)**
+**[中文](README.md) | [English](README-en.md)**
 
 ---
 
-A cross-platform bridge layer that serves both Feishu and Discord. `v2.9.1` refactors the core from "single-file logic stack" to "platform adapter layer + root router + OpenCode event hub + domain processors", focusing on cross-platform scalability, permission loop stability, directory instance consistency, and production maintainability.
+> **OpenCode Bridge** is an enterprise-grade AI programming collaboration bridge service that seamlessly integrates OpenCode (AI coding assistant) with mainstream instant messaging platforms, enabling cross-platform, cross-device intelligent programming collaboration.
 
-With runtime Cron (API + `/cron` + `///cron` + natural language parsing) and local reliability governance, this project further closes the capability gap with OpenClaw in "automated scheduling + ops availability", while maintaining advantages in multi-platform routing and permission loop engineering.
+---
 
-## 📋 Table of Contents
+## 📱 Supported Platforms
 
-- [Pain Points](#pain-points)
-- [Why Use This](#why-use-this)
-- [Capabilities Overview](#capabilities-overview)
-- [Demo](#demo)
-- [Architecture](#architecture)
-- [Quick Start](#quick-start)
-- [Deployment & Ops](#deployment--ops)
-- [Environment Variables](#environment-variables)
-- [Reliability Features](#reliability-features)
-- [Feishu Configuration](#feishu-configuration)
-- [Commands](#commands)
-- [Agent Usage](#agent-usage)
-- [Detailed Documentation](#detailed-documentation)
+| Platform | Status | Core Features |
+|----------|--------|---------------|
+| Feishu (Lark) | ✅ Full Support | Card interaction, streaming output, permission confirmation, file transfer, recall sync |
+| Discord | ✅ Full Support | Component interaction, Embed messages, Slash commands, channel management |
+| WeCom (Enterprise WeChat) | ✅ Full Support | Text interaction, message sending/receiving |
+| Telegram | ✅ Full Support | Text interaction, Inline keyboard |
+| QQ (OneBot) | ✅ Full Support | Text interaction, group chat support |
+| WhatsApp | ✅ Full Support | Text interaction, media messages |
+| WeChat (Personal) | ✅ Full Support | QR code login, text interaction |
 
-<a id="pain-points"></a>
-## 🎯 Pain Points
+---
 
-- Permission and question links must form a strict loop: `permission.asked` / `question.asked` must close properly, or tasks will stall.
-- Cross-platform parallelism risks cross-wiring: session binding, permission queues, and output buffers must be isolated by platform.
-- Directory instance consistency is a common pitfall: logs may show "allowed" but the OpenCode directory instance wasn't hit, causing tasks to hang.
-- Cards and text have different interaction models: Feishu and Discord cannot share the same interaction paradigm; each must use native platform capabilities.
-- Ops closure requirements are increasing: "running" is not enough; it must be verifiable, rollbackable, and support gray deployment.
+## ✨ Key Features
 
-This project solves not "can it reply to messages" but "can cross-platform AI tasks achieve long-term stable closure".
+### 🔄 Smart Session Management
+- **Independent Session Binding**: Each group/private chat binds to an independent OpenCode session with isolated context
+- **Session Migration**: Support session binding, migration, and renaming with context preserved across devices
+- **Multi-Project Support**: Multiple project directory switching with alias configuration
+- **Auto Cleanup**: Automatic cleanup of invalid sessions to prevent resource leaks
 
-<a id="why-use-this"></a>
-## 💡 Why Use This
+### 🤖 AI Interaction Capabilities
+- **Streaming Output**: Real-time AI response display with thinking chain support
+- **Permission Interaction**: AI permission requests confirmed within the chat platform
+- **Question Answering**: AI questions answered within the chat platform
+- **File Transfer**: AI can send files/screenshots to the chat platform
+- **Shell Passthrough**: Whitelisted commands can be executed directly in chat
 
-- User-friendly: permission confirmation, question answering, and session operations all happen within Feishu, without relying on local terminals.
-- Collaboration-friendly: supports binding existing sessions and migration binding, maintaining context across devices and groups.
-- Stability-friendly: session mapping persistence + dual-end undo + consistent cleanup rules avoid "looks normal but state is misaligned".
-- Ops-friendly: built-in deployment, upgrade, status checks, and background management workflows suitable for continuous hosted operation.
-- Future-version friendly: compatible with OpenCode Server Basic Auth, ready for mandatory password enforcement.
+### 🛡️ Reliability Assurance
+- **Heartbeat Monitoring**: Periodic OpenCode health probing
+- **Auto Rescue**: Automatic restart and recovery when OpenCode crashes
+- **Cron Tasks**: Runtime dynamic management of scheduled tasks
+- **Log Auditing**: Complete operation logs and error tracking
 
-<a id="capabilities-overview"></a>
-## 📸 Capabilities Overview
+### 🎛️ Web Management Panel
+- **Visual Configuration**: Real-time modification of all configuration parameters in browser
+- **Platform Management**: View connection status of each platform
+- **Cron Management**: Create, enable/disable, delete scheduled tasks
+- **Service Control**: View service status and remote restart
 
-| Capability | What You Get | Related Commands/Config |
-|---|---|---|
-| Unified group/private routing | Single entry point for private and group chat, routed to correct session | Group @bot; private direct message |
-| Private chat session selection | Choose "new session / bind existing" when creating chat | `/create_chat`, `/create-group` |
-| Manual session binding | Directly connect specified session to current group without interrupting context | `/session <sessionId>`, `ENABLE_MANUAL_SESSION_BIND` |
-| Migration binding & delete protection | Auto-migrate old group mappings and protect sessions from accidental deletion | Auto-enabled (manual binding scenarios) |
-| Lifecycle cleanup fallback | Startup cleanup and manual cleanup share same rules, reducing accidental cleanup | `/clear free session` |
-| Permission card loop | OpenCode permission requests confirmed within Feishu with result callback | `permission.asked` |
-| Question card loop | OpenCode questions answered/skipped within Feishu to continue tasks | `question.asked` |
-| Stream multi-card overflow protection | Auto-paginate when exceeding component budget, continuous old page updates | Stream card pagination (budget 180) |
-| Dual-end undo consistency | Undo rolls back both Feishu messages and OpenCode session state | `/undo` |
-| Model/role/intensity visual control | Switch model, role, reasoning intensity per session with panel view and commands | `/panel`, `/model`, `/agent`, `/effort` |
-| Context compression | Trigger session summarize within Feishu to free context window | `/compact` |
-| Shell command passthrough | Whitelisted `!` commands execute via OpenCode shell with echoed output | `!ls`, `!pwd`, `!git status` |
-| Server auth compatible | Supports OpenCode Server Basic Auth, ready for mandatory password default | `OPENCODE_SERVER_USERNAME`, `OPENCODE_SERVER_PASSWORD` |
-| File send to Feishu | AI can send files/screenshots from computer directly to current Feishu group | `/send`, `send-file` |
-| Working directory/project management | Specify working directory when creating session, with project aliases, group defaults, 9-stage security validation | `/project list`, `/session new <alias>`, `ALLOWED_DIRECTORIES` |
-| OpenCode local reliability governance | Runtime Cron (API/command/natural language) + local crash auto-rescue (with config backup/2-level fallback) + optional proactive heartbeat | `HEARTBEAT.md`, `RELIABILITY_*`, `logs/reliability-audit.jsonl` |
-| Deployment/ops closure | Integrated entry point for deploy/upgrade/check/background/systemd | `scripts/deploy.*`, `scripts/start.*` |
+---
 
-<a id="demo"></a>
-## 🖼️ Demo
-
-<details>
-<summary>Step 1: Private Chat Independent Session (Click to expand)</summary>
-
-<p>
-  <img src="assets/demo/1-1私聊独立会话.png" width="720" />
-  <img src="assets/demo/1-2私聊独立会话.png" width="720" />
-  <img src="assets/demo/1-3私聊独立会话.png" width="720" />
-  <img src="assets/demo/1-4私聊独立会话.png" width="720" />
-</p>
-
-</details>
-
-<details>
-<summary>Step 2: Multi-Group Independent Sessions (Click to expand)</summary>
-
-<p>
-  <img src="assets/demo/2-1多群聊独立会话.png" width="720" />
-  <img src="assets/demo/2-2多群聊独立会话.png.png" width="720" />
-  <img src="assets/demo/2-3多群聊独立会话.png.png" width="720" />
-</p>
-
-</details>
-
-<details>
-<summary>Step 3: Image Attachment Parsing (Click to expand)</summary>
-
-<p>
-  <img src="assets/demo/3-1图片附件解析.png" width="720" />
-  <img src="assets/demo/3-2图片附件解析.png.png" width="720" />
-  <img src="assets/demo/3-3图片附件解析.png.png" width="720" />
-</p>
-
-</details>
-
-<details>
-<summary>Step 4: Interactive Tools Test (Click to expand)</summary>
-
-<p>
-  <img src="assets/demo/4-1交互工具测试.png" width="720" />
-  <img src="assets/demo/4-2交互工具测试.png.png" width="720" />
-</p>
-
-</details>
-
-<details>
-<summary>Step 5: Low-level Permission Test (Click to expand)</summary>
-
-<p>
-  <img src="assets/demo/5-1底层权限测试.png" width="720" />
-  <img src="assets/demo/5-2底层权限测试.png.png" width="720" />
-  <img src="assets/demo/5-3底层权限测试.png.png" width="720" />
-  <img src="assets/demo/5-4底层权限测试.png.png" width="720" />
-</p>
-
-</details>
-
-<details>
-<summary>Step 6: Session Cleanup (Click to expand)</summary>
-
-<p>
-  <img src="assets/demo/6-1会话清理.png" width="720" />
-  <img src="assets/demo/6-2会话清理.png.png" width="720" />
-  <img src="assets/demo/6-3会话清理.png.png" width="720" />
-</p>
-
-</details>
-
-<a id="architecture"></a>
-## 📌 Architecture
-
-See [Architecture Document](assets/docs/architecture-en.md).
-
-Core layers:
-- **Platform Adapter Layer**: Feishu Adapter / Discord Adapter
-- **Entry & Routing Layer**: RootRouter / DiscordHandler
-- **Domain Service Layer**: PermissionHandler / QuestionHandler / OutputBuffer / ChatSessionStore
-- **OpenCode Integration Layer**: OpencodeClientWrapper / OpenCodeEventHub
-
-<a id="quick-start"></a>
 ## 🚀 Quick Start
 
-### 1) Run this command first (recommended)
-
-Linux/macOS:
+### 1. Clone Repository
 
 ```bash
 git clone https://github.com/HNGM-HP/opencode-bridge.git
 cd opencode-bridge
+```
+
+### 2. One-Click Deployment
+
+**Linux/macOS:**
+```bash
 chmod +x ./scripts/deploy.sh
 ./scripts/deploy.sh guide
 ```
 
-Windows PowerShell:
-
+**Windows PowerShell:**
 ```powershell
-git clone https://github.com/HNGM-HP/opencode-bridge.git
-cd opencode-bridge
 .\scripts\deploy.ps1 guide
 ```
 
-This command automatically:
-- Detects Node.js / npm (provides installation guide if missing)
-- Detects OpenCode installation and port status
-- Can install OpenCode with one click (`npm i -g opencode-ai`)
-- Installs project dependencies and compiles the bridge service
-- If `.env` doesn't exist, automatically copies from `.env.example` (won't overwrite existing `.env`)
-- Can input `FEISHU_APP_ID` / `FEISHU_APP_SECRET` directly in interactive phase (with undo/skip support)
+This command will automatically:
+- Detect and guide Node.js installation
+- Detect and guide OpenCode installation
+- Install project dependencies and compile
+- Generate initial configuration file
 
-**Note**:
-- Running without `guide` suffix opens the menu.
-- This command completes "deployment and environment preparation".
-- Feishu credentials must be filled by you; the script won't write real credentials; service cannot receive Feishu messages without them.
+### 3. Start Service
 
-### 2) Fill in Feishu configuration (required, skip if done in previous step)
-
-```bash
-cp .env.example .env
-```
-
-At minimum fill in:
-- `FEISHU_APP_ID`
-- `FEISHU_APP_SECRET`
-
-### 3) Start OpenCode (keep CLI interface)
-
-```bash
-opencode
-```
-
-### 4) Start the bridge service
-
-Linux/macOS:
-
+**Linux/macOS:**
 ```bash
 ./scripts/start.sh
 ```
 
-Windows PowerShell:
-
+**Windows PowerShell:**
 ```powershell
 .\scripts\start.ps1
 ```
 
-For development debugging:
-
+**Development Mode:**
 ```bash
 npm run dev
 ```
 
-### 5) npm CLI installation (better for local continuous running scenarios)
+### 4. Configure Platform
 
-```bash
-npm install -g opencode-bridge
-opencode-bridge
+After service starts, access the Web configuration panel:
+
+```
+http://localhost:4098
 ```
 
-Detailed configuration see [Deployment & Ops Document](assets/docs/deployment-en.md).
+You will be prompted to set an administrator password on first access.
 
-<a id="deployment--ops"></a>
-## 💻 Deployment & Ops
+---
 
-### Available commands after Node.js installed
-
-| Goal | Command | Description |
-|---|---|---|
-| One-click deploy | `node scripts/deploy.mjs deploy` | Clean install by default, then install dependencies and compile |
-| One-click upgrade | `node scripts/deploy.mjs upgrade` | Clean upgrade by default: uninstall/cleanup first, then pull and redeploy |
-| Install/upgrade OpenCode | `node scripts/deploy.mjs opencode-install` | Run `npm i -g opencode-ai` |
-| Check OpenCode environment | `node scripts/deploy.mjs opencode-check` | Check opencode command and port listening |
-| Start OpenCode CLI | `node scripts/deploy.mjs opencode-start` | Auto-write `opencode.json` then run `opencode` in foreground |
-| First-time guide | `node scripts/deploy.mjs guide` | Integrated flow for install/deploy/guide-start |
-| Management menu | `npm run manage:bridge` | Interactive menu (default entry point) |
-| Start background | `npm run start` | Start in background (auto-detect/supplement build) |
-| Stop background | `node scripts/stop.mjs` | Stop background process by PID |
-
-Detailed deployment instructions see [Deployment & Ops Document](assets/docs/deployment-en.md).
-
-<a id="environment-variables"></a>
-## ⚙️ Environment Variables
-
-Core configuration:
-
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `FEISHU_APP_ID` | Yes | - | Feishu App ID |
-| `FEISHU_APP_SECRET` | Yes | - | Feishu App Secret |
-| `OPENCODE_HOST` | No | `localhost` | OpenCode host address |
-| `OPENCODE_PORT` | No | `4096` | OpenCode port |
-| `DISCORD_ENABLED` | No | `false` | Enable Discord adapter |
-| `DISCORD_TOKEN` | No | - | Discord Bot Token |
-
-Full configuration see [Environment Variables Document](assets/docs/environment-en.md).
-
-<a id="reliability-features"></a>
-## 🛡️ Reliability Features (Heartbeat + Cron + Crash Rescue)
-
-See [Reliability Guide](assets/docs/reliability-en.md).
-
-### Quick Overview
-
-- **Built-in Cron tasks**: `watchdog-probe` (30s), `process-consistency-check` (60s), `budget-reset` (daily 0:00)
-- **Three management entry points**: HTTP API (`/cron/*`), Feishu (`/cron ...`), Discord (`///cron ...`)
-- **Proactive heartbeat**: Configurable timer sends check prompts to Agent Session
-- **Auto-rescue**: Auto-repair local OpenCode after consecutive failures reach threshold (loopback only)
-
-### Minimum Configuration
-
-```dotenv
-RELIABILITY_CRON_ENABLED=true
-RELIABILITY_CRON_API_ENABLED=true
-RELIABILITY_PROACTIVE_HEARTBEAT_ENABLED=false
-RELIABILITY_LOOPBACK_ONLY=true
-```
-
-<a id="feishu-configuration"></a>
-## ⚙️ Feishu Configuration
-
-See [Feishu Configuration Document](assets/docs/feishu-config-en.md).
-
-### Event Subscriptions
-
-| Event | Required | Purpose |
-|---|---|---|
-| `im.message.receive_v1` | Yes | Receive group/private messages |
-| `im.message.recalled_v1` | Yes | User undo triggers `/undo` rollback |
-| `im.chat.member.user.deleted_v1` | Yes | Member leaves group, triggers lifecycle cleanup |
-| `im.chat.disbanded_v1` | Yes | Group disbanded, cleanup local session mappings |
-| `card.action.trigger` | Yes | Handle control panel, permission confirmation, question card callbacks |
-
-### Application Permissions
-
-Batch import permissions (save to `acc.json` then import in developer backend):
-
-```json
-{
-  "scopes": {
-    "tenant": [
-      "im:message.p2p_msg:readonly",
-      "im:chat",
-      "im:chat.members:read",
-      "im:chat.members:write_only",
-      "im:message",
-      "im:message.group_at_msg:readonly",
-      "im:message.group_msg",
-      "im:message.reactions:read",
-      "im:message.reactions:write_only",
-      "im:resource"
-    ],
-    "user": []
-  }
-}
-```
-
-<a id="commands"></a>
-## 📖 Commands
-
-See [Commands Document](assets/docs/commands-en.md).
+## 📝 Command Reference
 
 ### Feishu Commands
 
 | Command | Description |
-|---|---|
+|---------|-------------|
+| `/help` | View help |
+| `/panel` | Open control panel (model, agent, effort) |
+| `/model <provider:model>` | Switch model |
+| `/agent <name>` | Switch Agent |
+| `/effort <level>` | Set reasoning effort |
+| `/session new` | Start new topic |
+| `/session <sessionId>` | Bind existing session |
+| `/undo` | Undo last interaction |
+| `/compact` | Compress context |
+| `/project list` | List available projects |
+| `/send <path>` | Send file to group |
+| `/cron ...` | Manage Cron tasks |
+| `!<shell-cmd>` | Passthrough Shell command |
+
+### Discord Commands
+
+| Command | Description |
+|---------|-------------|
+| `///session` | View bound session |
+| `///new` | Create and bind new session |
+| `///bind <sessionId>` | Bind existing session |
+| `///undo` | Undo last round |
+| `///compact` | Compress context |
+| `///workdir` | Set working directory |
+| `///cron ...` | Manage Cron tasks |
+
+### WeCom Commands
+
+| Command | Description |
+|---------|-------------|
 | `/help` | View help |
 | `/panel` | Open control panel |
 | `/model <provider:model>` | Switch model |
@@ -344,85 +156,136 @@ See [Commands Document](assets/docs/commands-en.md).
 | `/session new` | Start new topic |
 | `/undo` | Undo last interaction |
 | `/compact` | Compress context |
-| `!<shell command>` | Pass through shell command |
 
-### Discord Commands
+---
 
-| Command | Description |
-|---|---|
-| `///session` | View bound session |
-| `///new` | Create and bind new session |
-| `///bind <sessionId>` | Bind existing session |
-| `///undo` | Undo last |
-| `///compact` | Compress context |
+## 🏗️ Architecture Overview
 
-<a id="agent-usage"></a>
-## 🤖 Agent (Role) Usage
-
-See [Agent Guide](assets/docs/agent-en.md).
-
-### Quick Start
-
-- View current Agent: `/agent`
-- Switch Agent: `/agent <name>`
-- Return to default: `/agent off`
-
-### Custom Agent
-
-```text
-Create Role name=Travel Assistant; description=Expert at travel planning; type=primary; tools=webfetch
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Platform Adapter Layer                    │
+│  Feishu │ Discord │ WeCom │ Telegram │ QQ │ WhatsApp │ Weixin │
+└────┬────────┬────────┬────────┬────────┬────────┬──────────┘
+     │        │        │        │        │        │
+     └────────┴────────┴────────┴────────┴────────┘
+                        │
+              ┌─────────▼─────────┐
+              │     Router Layer      │
+              │   RootRouter      │
+              └─────────┬─────────┘
+                        │
+     ┌──────────────────┼──────────────────┐
+     │                  │                  │
+┌────▼────┐      ┌─────▼─────┐      ┌─────▼─────┐
+│Permission│     │ Question  │      │ Output    │
+│ Handler │      │ Handler   │      │ Buffer    │
+└────┬────┘      └─────┬─────┘      └─────┬─────┘
+     │                 │                  │
+     └─────────────────┼──────────────────┘
+                       │
+             ┌─────────▼─────────┐
+             │   OpenCode Integration   │
+             │  OpencodeClient   │
+             └─────────┬─────────┘
+                       │
+             ┌─────────▼─────────┐
+             │   OpenCode CLI    │
+             └───────────────────┘
 ```
 
-<a id="key-implementation-details"></a>
-## 📌 Key Implementation Details
+---
 
-See [Implementation Document](assets/docs/implementation-en.md).
+## 📚 Documentation
 
-- Permission request callback: `response` is `once | always | reject`
-- Question tool interaction: answers parsed from user text replies
-- Stream and thinking cards: text and thinking written to output buffer separately
-- `/undo` consistency: delete Feishu message and execute `revert` on OpenCode simultaneously
-
-<a id="troubleshooting"></a>
-## 🛠️ Troubleshooting
-
-See [Troubleshooting Document](assets/docs/troubleshooting-en.md).
-
-| Symptom | Check First |
-|---|---|
-| No OpenCode response after sending Feishu message | Check Feishu permission configuration |
-| No OpenCode response after clicking permission card | Confirm callback value is `once/always/reject` |
-| `/compact` fails | Check available OpenCode models |
-| Cannot stop background mode | Check if `logs/bridge.pid` is stale |
-
-<a id="detailed-documentation"></a>
-## 📚 Detailed Documentation
+### Core Documentation
 
 | Document | Description |
-|---|---|
-| [Architecture](assets/docs/architecture-en.md) | Project layering and platform capabilities |
-| [Environment Variables](assets/docs/environment-en.md) | Complete environment configuration |
-| [Reliability](assets/docs/reliability-en.md) | Heartbeat, Cron, and crash rescue |
-| [Feishu Config](assets/docs/feishu-config-en.md) | Event subscriptions and permissions |
-| [Commands](assets/docs/commands-en.md) | Complete command reference |
-| [Implementation](assets/docs/implementation-en.md) | Key implementation details |
+|----------|-------------|
+| [Architecture](assets/docs/architecture-en.md) | Project layered design and core module responsibilities |
+| [Configuration](assets/docs/environment-en.md) | Complete configuration parameter reference |
+| [Deployment](assets/docs/deployment-en.md) | Deployment, upgrade and systemd configuration |
+| [Commands](assets/docs/commands-en.md) | Complete command list and usage |
+| [Reliability](assets/docs/reliability-en.md) | Heartbeat, Cron and crash rescue configuration |
 | [Troubleshooting](assets/docs/troubleshooting-en.md) | Common issues and solutions |
-| [Deployment](assets/docs/deployment-en.md) | Deployment and systemd setup |
-| [Agent Guide](assets/docs/agent-en.md) | Role configuration and custom agents |
-| [Gray Deploy](assets/docs/rollout-en.md) | Gray deployment and rollback SOP |
+
+### Platform Configuration Documentation
+
+| Document | Description |
+|----------|-------------|
+| [Feishu Config](assets/docs/feishu-config-en.md) | Feishu event subscription and permission configuration |
+| [Discord Config](assets/docs/discord-config-en.md) | Discord bot configuration guide |
+| [WeCom Config](assets/docs/wecom-config-en.md) | Enterprise WeChat bot configuration guide |
+| [Telegram Config](assets/docs/telegram-config-en.md) | Telegram Bot configuration guide |
+| [QQ Config](assets/docs/qq-config-en.md) | QQ Official/OneBot protocol configuration guide |
+| [WhatsApp Config](assets/docs/whatsapp-config-en.md) | WhatsApp Personal/Business configuration guide |
+| [WeChat Personal Config](assets/docs/weixin-config-en.md) | WeChat personal account configuration guide |
+
+### Extended Documentation
+
+| Document | Description |
+|----------|-------------|
+| [Agent Usage](assets/docs/agent-en.md) | Role configuration and custom Agent |
+| [Implementation](assets/docs/implementation-en.md) | Key feature implementation details |
 | [SDK API](assets/docs/sdk-api-en.md) | OpenCode SDK integration guide |
 | [Workspace Guide](assets/docs/workspace-guide-en.md) | Working directory strategy and project configuration |
+| [Rollout](assets/docs/rollout-en.md) | Router mode rollout and rollback |
 
-<a id="license"></a>
-## 📝 License
+---
 
-This project uses [GNU General Public License v3.0](LICENSE)
+## 📋 Requirements
+
+- **Node.js**: >= 18.0.0
+- **Operating System**: Linux / macOS / Windows
+- **OpenCode**: Must be installed and running
+
+---
+
+## 🔧 Configuration
+
+### Configuration Methods
+
+| Method | Description |
+|--------|-------------|
+| Web Panel (Recommended) | Access `http://localhost:4098` for visual configuration |
+| SQLite Database | Configuration stored in `data/config.db` |
+| .env File | Only stores Admin panel startup parameters |
+
+### Core Configuration Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `FEISHU_ENABLED` | `false` | Enable Feishu adapter |
+| `DISCORD_ENABLED` | `false` | Enable Discord adapter |
+| `OPENCODE_HOST` | `localhost` | OpenCode host address |
+| `OPENCODE_PORT` | `4096` | OpenCode port |
+| `ADMIN_PORT` | `4098` | Web configuration panel port |
+
+For complete configuration parameters, refer to the [Configuration Center Documentation](assets/docs/environment-en.md).
+
+---
+
+## 📄 License
+
+This project is licensed under [GNU General Public License v3.0](LICENSE)
 
 **GPL v3 means:**
-- ✅ Free to use, modify, and distribute
+- ✅ Free to use, modify and distribute
 - ✅ Can be used for commercial purposes
-- 📝 Must open source modified versions
-- 📝 Must retain original author copyright
-- 📝 Derivative works must use GPL v3 license
+- ✅ Must open source modified versions
+- ✅ Must retain original author copyright
+- ✅ Derivative works must use GPL v3 license
 
-If this project helps you, please give it a ⭐️ Star!
+---
+
+## 🌟 Contributing
+
+If this project helps you, please give it a Star!
+
+For issues or suggestions, feel free to submit an [Issue](https://github.com/HNGM-HP/opencode-bridge/issues) or [Pull Request](https://github.com/HNGM-HP/opencode-bridge/pulls).
+
+---
+
+## 📞 Support
+
+- **GitHub Issues**: [Report Issues](https://github.com/HNGM-HP/opencode-bridge/issues)
+- **Project Home**: [GitHub Repository](https://github.com/HNGM-HP/opencode-bridge)

@@ -418,9 +418,14 @@ class DiscordHandler {
       }
     }
 
-    const success = await opencodeClient.replyQuestion(pending.request.id, answers);
-    if (!success) {
-      await notify('⚠️ 回答提交失败，请稍后重试。');
+    const result = await opencodeClient.replyQuestion(pending.request.id, answers);
+    if (!result.ok) {
+      if (result.expired) {
+        questionHandler.remove(pending.request.id);
+        await notify('⚠️ 问题已过期，请重新发起对话。');
+      } else {
+        await notify('⚠️ 回答提交失败，请稍后重试。');
+      }
       return;
     }
 

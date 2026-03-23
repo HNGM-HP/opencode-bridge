@@ -1,46 +1,130 @@
 # Implementation Details
 
-## 1) Permission Request Response
+**Version**: v2.9.5-beta
+**Last Updated**: 2026-03-23
 
-- In `permission.asked`, `tool` may not be a string tool name; actual whitelist matching may fall on the `permission` field.
-- The response interface requires `response` to be `once | always | reject`, not `allow | deny`.
+---
 
-## 2) Question Tool Interaction
+## 1. Permission Request Response
 
-- Questions are rendered as Feishu cards; answers are parsed from user text replies.
-- After parsing, responses are sent back as `answers: string[][]` required by OpenCode and included in undo history.
+### Key Points
 
-## 3) Streaming and Thinking Cards
+- In `permission.asked` event, `tool` may not be a string tool name; actual whitelist matching may fall on the `permission` field
+- The response interface requires `response` to be `once | always | reject`, not `allow | deny`
 
-- Text and thinking are written to output buffer separately; card mode switches automatically when thinking content appears.
-- Cards support expand/collapse for thinking; final state retains completion status.
+---
 
-## 4) `/undo` Consistency
+## 2. Question Tool Interaction
 
-- Requires deleting Feishu-side message and executing `revert` on OpenCode simultaneously.
-- Q&A scenarios may involve multiple associated messages; uses recursive rollback as fallback.
+### Flow
 
-## 5) Private Chat Group Creation Card Interaction
+1. Questions are rendered as Feishu cards
+2. Answers are parsed from user text replies
+3. After parsing, responses are sent back as `answers: string[][]` required by OpenCode
+4. Answers are included in undo history for consistency
 
-- Dropdown selection action only records session selection, does not depend on card redraw; behavior consistent with `/panel` dropdown interaction.
-- Group creation and binding are executed only when clicking "Create Group", avoiding misbinding due to card state synchronization.
+---
 
-## 6) `/clear free session` Behavior
+## 3. Streaming and Thinking Cards
 
-- This command does not create a separate cleanup rule; instead reuses lifecycle scan logic.
-- Allows manual triggering of a fallback scan with same rules as "startup cleanup" without restarting the process.
+### Behavior
 
-## 7) File Sending to Feishu
+- Text and thinking content are written to output buffer separately
+- Card mode switches automatically when thinking content appears
+- Cards support expand/collapse for thinking content
+- Final state retains completion status
 
-- `/send <absolute path>` directly calls Feishu upload API, does not go through AI, zero latency.
-- Images (.png/.jpg/.gif/.webp etc.) use image channel (10MB limit); others use file channel (30MB limit), consistent with Feishu official limits.
-- Built-in sensitive file blacklist (.env, id_rsa, .pem etc.) prevents accidental sending.
-- **Security Policy**: Only allows sending files located within `ALLOWED_DIRECTORIES` whitelist range; when `ALLOWED_DIRECTORIES` is unconfigured, `/send` defaults to rejection.
+---
 
-## 8) Working Directory Strategy (DirectoryPolicy)
+## 4. `/undo` Consistency
 
-- All session creation entries uniformly go through `DirectoryPolicy.resolve()` 9-stage validation pipeline.
-- Validation order: priority merge → format validation → path normalization → dangerous path interception → whitelist validation → existence pre-check → realpath resolution → Git root normalization → post-normalization re-check.
-- Secure default: When `ALLOWED_DIRECTORIES` is unconfigured, users cannot customize paths.
-- Error message desensitization: Users only see generic prompts; full paths are written to server logs only.
-- Directory priority: Explicit specification > project aliases > group default > global default > OpenCode server default.
+### Requirements
+
+- Requires deleting platform-side message AND executing `revert` on OpenCode simultaneously
+- Q&A scenarios may involve multiple associated messages
+- Uses recursive rollback as fallback for complex scenarios
+
+---
+
+## 5. Private Chat Group Creation Card Interaction
+
+### Behavior
+
+- Dropdown selection action only records session selection
+- Does not depend on card redraw
+- Behavior consistent with `/panel` dropdown interaction
+- Group creation and binding are executed only when clicking "Create Group" button
+- Avoids misbinding due to card state synchronization issues
+
+---
+
+## 6. `/clear free session` Behavior
+
+### Implementation
+
+- This command does NOT create a separate cleanup rule
+- Reuses existing lifecycle scan logic
+- Can trigger cleanup scan without process restart
+
+---
+
+## 7. File Sending to Feishu
+
+### Implementation
+
+- `/send <absolute path>` directly calls Feishu upload API
+- Does NOT go through AI, zero latency
+- Images (`.png/.jpg/.gif/.webp`, etc.) use image channel (limit 10MB)
+- Other files use file channel (limit 30MB)
+- Consistent with Feishu official limits
+
+### Security Policy
+
+| Policy | Description |
+|--------|-------------|
+| Sensitive file blacklist | Blocks `.env`, `id_rsa`, `.pem`, etc. |
+| Directory whitelist | Only allows sending files within `ALLOWED_DIRECTORIES` |
+| Default behavior | When `ALLOWED_DIRECTORIES` is not configured, `/send` is rejected by default |
+
+---
+
+## 8. Directory Policy (DirectoryPolicy)
+
+### Validation Pipeline
+
+All session creation entry points go through `DirectoryPolicy.resolve()` 9-stage validation:
+
+| Stage | Check |
+|-------|-------|
+| 1 | **Priority Merge**: Merge directory candidates from all sources |
+| 2 | **Format Check**: Check path format and length |
+| 3 | **Normalization**: Standardize separators, remove redundant parts |
+| 4 | **Danger Block**: Reject sensitive paths like `/etc`, `/root` |
+| 5 | **Whitelist Check**: Validate against `ALLOWED_DIRECTORIES` |
+| 6 | **Existence Pre-check**: Check if directory exists |
+| 7 | **realpath Resolution**: Resolve symbolic links to real paths |
+| 8 | **Git Root Normalization**: Normalize to Git repository root |
+| 9 | **Post-normalization Check**: Re-validate whitelist after normalization |
+
+### Directory Priority
+
+| Priority | Source |
+|----------|--------|
+| 1 | Explicit input directory (command parameter) |
+| 2 | Project alias (`PROJECT_ALIASES`) |
+| 3 | Group default directory (session binding storage) |
+| 4 | Global default directory (`DEFAULT_WORK_DIRECTORY`) |
+| 5 | OpenCode server default directory |
+
+### Security Defaults
+
+- When `ALLOWED_DIRECTORIES` is not configured, users cannot customize paths via `/session new <path>`
+- Error messages are sanitized; full paths only appear in server logs
+
+---
+
+## 9. Related Documentation
+
+- [Workspace Guide](workspace-guide-en.md) - Working directory strategy
+- [Configuration Center](environment-en.md) - Directory-related configuration
+- [Commands Reference](commands-en.md) - File sending commands

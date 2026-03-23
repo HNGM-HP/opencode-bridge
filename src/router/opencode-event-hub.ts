@@ -19,6 +19,9 @@ import { permissionHandler } from '../permissions/handler.js';
 import { questionHandler } from '../opencode/question-handler.js';
 import { outputBuffer } from '../opencode/output-buffer.js';
 import { feishuClient } from '../feishu/client.js';
+import * as platformRegistry from '../platform/registry.js';
+import type { StreamStateManager, TimelineSegment as StreamTimelineSegment } from '../store/stream-state.js';
+import { CORRELATION_CACHE_TTL_MS } from '../store/stream-state.js';
 
 // ==================== 类型定义 ====================
 
@@ -72,26 +75,16 @@ export type CorrelationChatRef = {
  * 封装 index.ts 中的所有依赖
  */
 export interface OpenCodeEventContext {
-  // 常量
-  CORRELATION_CACHE_TTL_MS: number;
-
-  // Map 状态
-  streamContentMap: Map<string, { text: string; thinking: string }>;
-  reasoningSnapshotMap: Map<string, string>;
-  textSnapshotMap: Map<string, string>;
-  retryNoticeMap: Map<string, string>;
-  errorNoticeMap: Map<string, string>;
-  streamCardMessageIdsMap: Map<string, string[]>;
-  toolCallChatMap: Map<string, CorrelationChatRef>;
-  messageChatMap: Map<string, CorrelationChatRef>;
-  streamToolStateMap: Map<string, Map<string, ToolRuntimeState>>;
-  streamTimelineMap: Map<string, { order: string[]; segments: Map<string, TimelineSegment> }>;
+  // 流状态管理器
+  streamStateManager: StreamStateManager;
 
   // 辅助函数
   toSessionId: (value: unknown) => string;
   toNonEmptyString: (value: unknown) => string | undefined;
-  setCorrelationChatRef: (map: Map<string, CorrelationChatRef>, key: unknown, chatId: unknown) => void;
-  getCorrelationChatRef: (map: Map<string, CorrelationChatRef>, key: unknown) => string | undefined;
+  setToolCallCorrelation: (toolCallId: unknown, chatId: unknown) => void;
+  setMessageCorrelation: (messageId: unknown, chatId: unknown) => void;
+  getToolCallCorrelation: (toolCallId: unknown) => string | undefined;
+  getMessageCorrelation: (messageId: unknown) => string | undefined;
   resolvePermissionChat: (event: PermissionRequestEvent) => PermissionChatResolution;
   normalizeToolStatus: (status: unknown) => 'pending' | 'running' | 'completed' | 'failed';
   getToolStatusText: (status: ToolRuntimeState['status']) => string;
@@ -241,10 +234,8 @@ export class OpenCodeEventHub {
       permissionHandler,
       opencodeClient,
       outputBuffer,
-      CORRELATION_CACHE_TTL_MS,
-      setCorrelationChatRef,
-      toolCallChatMap,
-      messageChatMap,
+      setToolCallCorrelation,
+      setMessageCorrelation,
       upsertTimelineNote,
     } = this.injectedDependencies();
 
@@ -308,6 +299,114 @@ export class OpenCodeEventHub {
         'permission'
       );
       outputBuffer.touch(bufferKey);
+
+      // 为 QQ 等不支持卡片的平台发送文本权限请求通知
+      if (route.platform === 'qq') {
+        const adapter = platformRegistry.get('qq');
+        if (adapter) {
+          const sender = adapter.getSender();
+          const riskText = permissionInfo.risk === 'high' ? '⚠️ 高风险' :
+                          permissionInfo.risk === 'medium' ? '⚡ 中等风险' : '✅ 低风险';
+          const permissionText = `🔐 权限确认请求
+
+工具名称: ${permissionInfo.tool}
+操作描述: ${permissionInfo.description}
+风险等级: ${riskText}
+
+请回复以下选项之一:
+1 - 允许
+2 - 拒绝
+3 - 始终允许此工具
+
+也可以直接回复: 允许 / 拒绝 / 始终允许 (或 y / n / always)`;
+          sender.sendText(route.conversationId, permissionText).catch(err => {
+            console.error('[权限] QQ 权限请求通知发送失败:', err);
+          });
+        }
+      }
+
+      // 为 Telegram 发送带 InlineKeyboard 的权限请求卡片
+      if (route.platform === 'telegram') {
+        const adapter = platformRegistry.get('telegram');
+        if (adapter) {
+          const sender = adapter.getSender();
+          const riskText = permissionInfo.risk === 'high' ? '⚠️ 高风险' :
+                          permissionInfo.risk === 'medium' ? '⚡ 中等风险' : '✅ 低风险';
+          const permissionText = `🔐 权限确认请求
+
+工具名称: ${permissionInfo.tool}
+操作描述: ${permissionInfo.description}
+风险等级: ${riskText}
+
+也可以直接回复: 允许 / 拒绝 / 始终允许 (或 y / n / always)`;
+
+          const allowCallbackData = JSON.stringify({
+            action: 'permission_allow',
+            sessionId: permissionInfo.sessionId,
+            permissionId: permissionInfo.permissionId,
+            remember: false,
+            ...(event.parentSessionId ? { parentSessionId: event.parentSessionId } : {}),
+            ...(event.relatedSessionId ? { relatedSessionId: event.relatedSessionId } : {}),
+          });
+
+          const denyCallbackData = JSON.stringify({
+            action: 'permission_deny',
+            sessionId: permissionInfo.sessionId,
+            permissionId: permissionInfo.permissionId,
+            ...(event.parentSessionId ? { parentSessionId: event.parentSessionId } : {}),
+            ...(event.relatedSessionId ? { relatedSessionId: event.relatedSessionId } : {}),
+          });
+
+          const alwaysAllowCallbackData = JSON.stringify({
+            action: 'permission_allow',
+            sessionId: permissionInfo.sessionId,
+            permissionId: permissionInfo.permissionId,
+            remember: true,
+            ...(event.parentSessionId ? { parentSessionId: event.parentSessionId } : {}),
+            ...(event.relatedSessionId ? { relatedSessionId: event.relatedSessionId } : {}),
+          });
+
+          const permissionCard = {
+            text: permissionText,
+            telegramText: permissionText,
+            buttons: [
+              { text: '✅ 允许', callback_data: allowCallbackData },
+              { text: '❌ 拒绝', callback_data: denyCallbackData },
+              { text: '📝 始终允许', callback_data: alwaysAllowCallbackData },
+            ],
+          };
+
+          sender.sendCard(route.conversationId, permissionCard).catch(err => {
+            console.error('[权限] Telegram 权限请求卡片发送失败:', err);
+          });
+        }
+      }
+
+      // 为企业微信发送 Markdown 格式的权限请求
+      if (route.platform === 'wecom') {
+        const adapter = platformRegistry.get('wecom');
+        if (adapter) {
+          const sender = adapter.getSender();
+          const riskEmoji = permissionInfo.risk === 'high' ? '🔴' :
+                          permissionInfo.risk === 'medium' ? '🟡' : '🟢';
+          const riskLabel = permissionInfo.risk === 'high' ? '高风险' :
+                          permissionInfo.risk === 'medium' ? '中等风险' : '低风险';
+          // 企业微信 Markdown 格式有限，使用 > 引用和纯文本
+          const permissionText = `> 🔐 权限确认请求
+
+工具名称: ${permissionInfo.tool}
+操作描述: ${permissionInfo.description}
+风险等级: ${riskEmoji} ${riskLabel}
+
+请回复选项编号或关键词:
+1️⃣ 允许 (或回复 y)
+2️⃣ 拒绝 (或回复 n)
+3️⃣ 始终允许 (或回复 always)`;
+          sender.sendText(route.conversationId, permissionText).catch(err => {
+            console.error('[权限] 企业微信权限请求通知发送失败:', err);
+          });
+        }
+      }
     };
 
     console.log(
@@ -322,8 +421,8 @@ export class OpenCodeEventHub {
       if (event.relatedSessionId) {
         chatSessionStore.rememberSessionAlias(event.relatedSessionId, chatId, CORRELATION_CACHE_TTL_MS);
       }
-      setCorrelationChatRef(toolCallChatMap, event.callId, chatId);
-      setCorrelationChatRef(messageChatMap, event.messageId, chatId);
+      setToolCallCorrelation(event.callId, chatId);
+      setMessageCorrelation(event.messageId, chatId);
     }
 
     // 1. 检查白名单
@@ -391,7 +490,7 @@ export class OpenCodeEventHub {
   private handleSessionStatus(event: unknown): void {
     if (!this.context) return;
 
-    const { toSessionId, chatSessionStore, outputBuffer, retryNoticeMap, upsertTimelineNote, markActiveToolsCompleted } = this.injectedDependencies();
+    const { toSessionId, chatSessionStore, outputBuffer, streamStateManager, upsertTimelineNote, markActiveToolsCompleted } = this.injectedDependencies();
 
     const eventObj = event as Record<string, unknown>;
     const sessionID = toSessionId(eventObj?.sessionID || eventObj?.sessionId);
@@ -411,8 +510,8 @@ export class OpenCodeEventHub {
       const attempt = typeof status.attempt === 'number' ? status.attempt : 0;
       const message = typeof status.message === 'string' ? status.message : '上游模型请求失败，正在重试';
       const signature = `${attempt}:${message}`;
-      if (retryNoticeMap.get(sessionID) !== signature) {
-        retryNoticeMap.set(sessionID, signature);
+      if (streamStateManager.getRetryNotice(sessionID) !== signature) {
+        streamStateManager.setRetryNotice(sessionID, signature);
         upsertTimelineNote(bufferKey, `status-retry:${sessionID}:${signature}`, `⚠️ 模型重试（第 ${attempt} 次）：${message}`, 'retry');
         outputBuffer.touch(bufferKey);
       }
@@ -453,7 +552,7 @@ export class OpenCodeEventHub {
   private async handleMessageUpdated(event: unknown): Promise<void> {
     if (!this.context) return;
 
-    const { toSessionId, chatSessionStore, outputBuffer, CORRELATION_CACHE_TTL_MS, setCorrelationChatRef, messageChatMap, formatProviderError, applyFailureToSession } = this.injectedDependencies();
+    const { toSessionId, chatSessionStore, outputBuffer, setMessageCorrelation, formatProviderError, applyFailureToSession } = this.injectedDependencies();
 
     const eventObj = event as Record<string, unknown>;
     const info = eventObj?.info as Record<string, unknown> | undefined;
@@ -485,7 +584,7 @@ export class OpenCodeEventHub {
 
     if (typeof info.id === 'string' && info.id) {
       outputBuffer.setOpenCodeMsgId(bufferKey, info.id);
-      setCorrelationChatRef(messageChatMap, info.id, chatId);
+      setMessageCorrelation(info.id, chatId);
     }
 
     if (info.error) {
@@ -515,10 +614,8 @@ export class OpenCodeEventHub {
       toSessionId,
       chatSessionStore,
       outputBuffer,
-      CORRELATION_CACHE_TTL_MS,
-      setCorrelationChatRef,
-      toolCallChatMap,
-      messageChatMap,
+      setToolCallCorrelation,
+      setMessageCorrelation,
       asRecord,
       normalizeToolStatus,
       buildToolTraceOutput,
@@ -527,8 +624,7 @@ export class OpenCodeEventHub {
       upsertTimelineNote,
       appendTimelineText,
       setTimelineText,
-      reasoningSnapshotMap,
-      textSnapshotMap,
+      streamStateManager,
       appendTextFromPart,
       appendReasoningFromPart,
       stringifyToolOutput,
@@ -575,12 +671,12 @@ export class OpenCodeEventHub {
         : typeof toolPart.id === 'string' && toolPart.id
           ? toolPart.id
           : `${toolName}:${Date.now()}`;
-      setCorrelationChatRef(toolCallChatMap, toolPart.callID, chatId);
-      setCorrelationChatRef(toolCallChatMap, toolPart.callId, chatId);
-      setCorrelationChatRef(toolCallChatMap, toolPart.toolCallID, chatId);
-      setCorrelationChatRef(toolCallChatMap, toolPart.toolCallId, chatId);
-      setCorrelationChatRef(messageChatMap, toolPart.messageID, chatId);
-      setCorrelationChatRef(messageChatMap, toolPart.messageId, chatId);
+      setToolCallCorrelation(toolPart.callID, chatId);
+      setToolCallCorrelation(toolPart.callId, chatId);
+      setToolCallCorrelation(toolPart.toolCallID, chatId);
+      setToolCallCorrelation(toolPart.toolCallId, chatId);
+      setMessageCorrelation(toolPart.messageID, chatId);
+      setMessageCorrelation(toolPart.messageId, chatId);
       const previous = getOrCreateToolStateBucket(bufferKey).get(toolKey);
       const output = buildToolTraceOutput(toolPart, status, !previous || !previous.output);
 
@@ -664,9 +760,9 @@ export class OpenCodeEventHub {
           outputBuffer.appendThinking(bufferKey, delta);
           if (typeof part?.id === 'string') {
             const key = `${sessionID}:${part.id}`;
-            const prev = reasoningSnapshotMap.get(key) || '';
+            const prev = streamStateManager.getReasoningSnapshot(key) || '';
             const next = `${prev}${delta}`;
-            reasoningSnapshotMap.set(key, next);
+            streamStateManager.setReasoningSnapshot(key, next);
             setTimelineText(bufferKey, `reasoning:${key}`, 'reasoning', next);
           } else {
             appendTimelineText(bufferKey, `reasoning:${sessionID}:anonymous`, 'reasoning', delta);
@@ -676,9 +772,9 @@ export class OpenCodeEventHub {
         if (part?.type === 'text') {
           if (typeof part?.id === 'string' && part.id) {
             const key = `${sessionID}:${part.id}`;
-            const prev = textSnapshotMap.get(key) || '';
+            const prev = streamStateManager.getTextSnapshot(key) || '';
             const next = `${prev}${delta}`;
-            textSnapshotMap.set(key, next);
+            streamStateManager.setTextSnapshot(key, next);
             setTimelineText(bufferKey, `text:${key}`, 'text', next);
           } else {
             appendTimelineText(bufferKey, `text:${sessionID}:anonymous`, 'text', delta);
@@ -705,9 +801,9 @@ export class OpenCodeEventHub {
           outputBuffer.appendThinking(bufferKey, reasoningText);
           if (typeof part?.id === 'string' && part.id) {
             const key = `${sessionID}:${part.id}`;
-            const prev = reasoningSnapshotMap.get(key) || '';
+            const prev = streamStateManager.getReasoningSnapshot(key) || '';
             const next = `${prev}${reasoningText}`;
-            reasoningSnapshotMap.set(key, next);
+            streamStateManager.setReasoningSnapshot(key, next);
             setTimelineText(bufferKey, `reasoning:${key}`, 'reasoning', next);
           } else {
             appendTimelineText(bufferKey, `reasoning:${sessionID}:anonymous`, 'reasoning', reasoningText);
@@ -717,9 +813,9 @@ export class OpenCodeEventHub {
         outputBuffer.appendThinking(bufferKey, deltaObj.thinking);
         if (typeof part?.id === 'string' && part.id) {
           const key = `${sessionID}:${part.id}`;
-          const prev = reasoningSnapshotMap.get(key) || '';
+          const prev = streamStateManager.getReasoningSnapshot(key) || '';
           const next = `${prev}${deltaObj.thinking}`;
-          reasoningSnapshotMap.set(key, next);
+          streamStateManager.setReasoningSnapshot(key, next);
           setTimelineText(bufferKey, `reasoning:${key}`, 'reasoning', next);
         } else {
           appendTimelineText(bufferKey, `reasoning:${sessionID}:anonymous`, 'reasoning', deltaObj.thinking);
@@ -728,9 +824,9 @@ export class OpenCodeEventHub {
         outputBuffer.append(bufferKey, deltaObj.text);
         if (typeof part?.id === 'string' && part.id) {
           const key = `${sessionID}:${part.id}`;
-          const prev = textSnapshotMap.get(key) || '';
+          const prev = streamStateManager.getTextSnapshot(key) || '';
           const next = `${prev}${deltaObj.text}`;
-          textSnapshotMap.set(key, next);
+          streamStateManager.setTextSnapshot(key, next);
           setTimelineText(bufferKey, `text:${key}`, 'text', next);
         } else {
           appendTimelineText(bufferKey, `text:${sessionID}:anonymous`, 'text', deltaObj.text);
@@ -740,9 +836,9 @@ export class OpenCodeEventHub {
         if (part?.type === 'reasoning') {
           if (typeof part?.id === 'string' && part.id) {
             const key = `${sessionID}:${part.id}`;
-            const prev = reasoningSnapshotMap.get(key) || '';
+            const prev = streamStateManager.getReasoningSnapshot(key) || '';
             const next = `${prev}${deltaObj.text}`;
-            reasoningSnapshotMap.set(key, next);
+            streamStateManager.setReasoningSnapshot(key, next);
             setTimelineText(bufferKey, `reasoning:${key}`, 'reasoning', next);
           } else {
             appendTimelineText(bufferKey, `reasoning:${sessionID}:anonymous`, 'reasoning', deltaObj.text);
@@ -750,9 +846,9 @@ export class OpenCodeEventHub {
         } else if (part?.type === 'text') {
           if (typeof part?.id === 'string' && part.id) {
             const key = `${sessionID}:${part.id}`;
-            const prev = textSnapshotMap.get(key) || '';
+            const prev = streamStateManager.getTextSnapshot(key) || '';
             const next = `${prev}${deltaObj.text}`;
-            textSnapshotMap.set(key, next);
+            streamStateManager.setTextSnapshot(key, next);
             setTimelineText(bufferKey, `text:${key}`, 'text', next);
           } else {
             appendTimelineText(bufferKey, `text:${sessionID}:anonymous`, 'text', deltaObj.text);
@@ -789,7 +885,201 @@ export class OpenCodeEventHub {
       questionHandler.register(request, bufferKey, route.conversationId);
       upsertTimelineNote(bufferKey, `question:${request.sessionID}:${request.id}`, '🤝 问答交互（请在当前流式卡片中作答）', 'question');
       outputBuffer.touch(bufferKey);
+
+      // 为 QQ 等不支持卡片的平台发送文本问答通知
+      if (route.platform === 'qq') {
+        const adapter = platformRegistry.get('qq');
+        if (adapter) {
+          const sender = adapter.getSender();
+          const firstQuestion = request.questions[0];
+          if (firstQuestion) {
+            const questionText = this.buildQuestionText(request);
+            sender.sendText(route.conversationId, questionText).catch(err => {
+              console.error('[问题] QQ 问答通知发送失败:', err);
+            });
+          }
+        }
+      }
+
+      // 为 WhatsApp 平台发送文本问答提示
+      if (route.platform === 'whatsapp') {
+        const adapter = platformRegistry.get('whatsapp');
+        if (adapter) {
+          const sender = adapter.getSender();
+          const questionText = this.buildQuestionText(request);
+          sender.sendText(route.conversationId, questionText).catch(err => {
+            console.error('[问题] WhatsApp 问答提示发送失败:', err);
+          });
+        }
+      }
+
+      // 为 Telegram 发送带 InlineKeyboard 的问答卡片
+      if (route.platform === 'telegram') {
+        this.sendTelegramQuestionCard(route.conversationId, request);
+      }
+
+      // 为企业微信发送 Markdown 格式的问答提示
+      if (route.platform === 'wecom') {
+        const adapter = platformRegistry.get('wecom');
+        if (adapter) {
+          const sender = adapter.getSender();
+          const questionText = this.buildWeComQuestionText(request);
+          sender.sendText(route.conversationId, questionText).catch(err => {
+            console.error('[问题] 企业微信问答提示发送失败:', err);
+          });
+        }
+      }
     }
+  }
+
+  /**
+   * 构建问答提示文本消息
+   */
+  private buildQuestionText(request: import('../opencode/question-handler.js').QuestionRequest): string {
+    const totalQuestions = request.questions.length;
+    const lines: string[] = ['🤝 AI 需要您回答以下问题：'];
+
+    for (let i = 0; i < totalQuestions; i++) {
+      const question = request.questions[i];
+      const questionNum = i + 1;
+      lines.push(`\n【问题 ${questionNum}/${totalQuestions}】`);
+      if (question.header) {
+        lines.push(question.header);
+      }
+      if (question.question) {
+        lines.push(question.question);
+      }
+      if (question.options && question.options.length > 0) {
+        lines.push('\n选项：');
+        for (let j = 0; j < question.options.length; j++) {
+          const option = question.options[j];
+          lines.push(`  ${j + 1}. ${option.label}${option.description ? ` - ${option.description}` : ''}`);
+        }
+        if (question.multiple) {
+          lines.push('（可多选，用空格或逗号分隔多个编号）');
+        }
+      }
+    }
+
+    lines.push('\n请回复选项编号（如 1）或直接输入自定义答案');
+    lines.push('回复"跳过"可跳过当前问题');
+
+    return lines.join('\n');
+  }
+
+  /**
+   * 构建企业微信 Markdown 格式的问答提示文本消息
+   * 企业微信 Markdown 格式有限，避免使用 **粗体**、_斜体_ 等语法
+   */
+  private buildWeComQuestionText(request: import('../opencode/question-handler.js').QuestionRequest): string {
+    const totalQuestions = request.questions.length;
+    const lines: string[] = ['> 🤝 AI 需要您回答以下问题：'];
+
+    for (let i = 0; i < totalQuestions; i++) {
+      const question = request.questions[i];
+      const questionNum = i + 1;
+      lines.push(`\n【问题 ${questionNum}/${totalQuestions}】`);
+      if (question.header) {
+        lines.push(question.header);
+      }
+      if (question.question) {
+        lines.push(question.question);
+      }
+      if (question.options && question.options.length > 0) {
+        lines.push('\n选项：');
+        for (let j = 0; j < question.options.length; j++) {
+          const option = question.options[j];
+          lines.push(`  ${j + 1}️⃣ ${option.label}${option.description ? ` - ${option.description}` : ''}`);
+        }
+        if (question.multiple) {
+          lines.push('（可多选，用空格或逗号分隔多个编号）');
+        }
+      }
+    }
+
+    lines.push('\n---');
+    lines.push('请回复选项编号（如 1）或直接输入自定义答案');
+    lines.push('回复"跳过"可跳过当前问题');
+
+    return lines.join('\n');
+  }
+
+  /**
+   * 为 Telegram 发送带 InlineKeyboard 的问答卡片
+   */
+  private sendTelegramQuestionCard(
+    conversationId: string,
+    request: import('../opencode/question-handler.js').QuestionRequest
+  ): void {
+    const adapter = platformRegistry.get('telegram');
+    if (!adapter) return;
+
+    const sender = adapter.getSender();
+    const questionCount = request.questions.length;
+
+    if (questionCount === 0) return;
+
+    // 获取当前问题（初始为第一个）
+    const questionIndex = 0;
+    const question = request.questions[questionIndex];
+    const questionText = `❓ *${this.escapeTelegramMarkdown(question.header || '问题')}*\n\n${this.escapeTelegramMarkdown(question.question)}`;
+
+    // 构建选项按钮
+    const buttons: { text: string; callback_data: string }[] = [];
+    const optionLabels = question.options.map(opt => opt.label);
+
+    for (let i = 0; i < optionLabels.length; i++) {
+      const label = optionLabels[i];
+      const callbackData = JSON.stringify({
+        action: 'question_select',
+        requestId: request.id,
+        sessionId: request.sessionID,
+        questionIndex: questionIndex,
+        label: label,
+      });
+      buttons.push({ text: label, callback_data: callbackData });
+    }
+
+    // 添加跳过按钮
+    const skipCallbackData = JSON.stringify({
+      action: 'question_skip',
+      requestId: request.id,
+      sessionId: request.sessionID,
+      questionIndex: questionIndex,
+    });
+    buttons.push({ text: '⏭️ 跳过', callback_data: skipCallbackData });
+
+    // 如果支持自定义答案，添加自定义按钮
+    if (question.custom) {
+      const customCallbackData = JSON.stringify({
+        action: 'question_custom',
+        requestId: request.id,
+        sessionId: request.sessionID,
+        questionIndex: questionIndex,
+      });
+      buttons.push({ text: '✏️ 自定义', callback_data: customCallbackData });
+    }
+
+    const progressHint = questionCount > 1
+      ? `\n\n📋 第 ${questionIndex + 1}/${questionCount} 题`
+      : '';
+
+    const questionCard = {
+      text: questionText + progressHint + '\n\n💡 也可以直接回复文本作答',
+      telegram_text: questionText + progressHint + '\n\n💡 也可以直接回复文本作答',
+      buttons,
+    };
+
+    sender.sendCard(conversationId, questionCard).catch(err => {
+      console.error('[问题] Telegram 问答卡片发送失败:', err);
+    });
+  }
+
+  /**
+   * 转义 Telegram Markdown 特殊字符
+   */
+  private escapeTelegramMarkdown(text: string): string {
+    return text.replace(/([_*\[\]()~`>#+\-=|{}.!\\])/g, '\\$1');
   }
 
   // ==================== 依赖注入辅助 ====================
@@ -806,21 +1096,13 @@ export class OpenCodeEventHub {
     outputBuffer: typeof import('../opencode/output-buffer.js').outputBuffer;
     feishuClient: typeof import('../feishu/client.js').feishuClient;
     // 从 context 解构
-    CORRELATION_CACHE_TTL_MS: number;
-    streamContentMap: Map<string, { text: string; thinking: string }>;
-    reasoningSnapshotMap: Map<string, string>;
-    textSnapshotMap: Map<string, string>;
-    retryNoticeMap: Map<string, string>;
-    errorNoticeMap: Map<string, string>;
-    streamCardMessageIdsMap: Map<string, string[]>;
-    toolCallChatMap: Map<string, CorrelationChatRef>;
-    messageChatMap: Map<string, CorrelationChatRef>;
-    streamToolStateMap: Map<string, Map<string, ToolRuntimeState>>;
-    streamTimelineMap: Map<string, { order: string[]; segments: Map<string, TimelineSegment> }>;
+    streamStateManager: StreamStateManager;
     toSessionId: (value: unknown) => string;
     toNonEmptyString: (value: unknown) => string | undefined;
-    setCorrelationChatRef: (map: Map<string, CorrelationChatRef>, key: unknown, chatId: unknown) => void;
-    getCorrelationChatRef: (map: Map<string, CorrelationChatRef>, key: unknown) => string | undefined;
+    setToolCallCorrelation: (toolCallId: unknown, chatId: unknown) => void;
+    setMessageCorrelation: (messageId: unknown, chatId: unknown) => void;
+    getToolCallCorrelation: (toolCallId: unknown) => string | undefined;
+    getMessageCorrelation: (messageId: unknown) => string | undefined;
     resolvePermissionChat: (event: PermissionRequestEvent) => PermissionChatResolution;
     normalizeToolStatus: (status: unknown) => 'pending' | 'running' | 'completed' | 'failed';
     getToolStatusText: (status: ToolRuntimeState['status']) => string;

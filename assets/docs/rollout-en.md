@@ -1,30 +1,39 @@
 # Gray Deployment and Rollback SOP
 
-> **Note**: This section applies to v2.9.1, involving router mode gray upgrade flow.
+**Version**: v2.9.5-beta
+**Last Updated**: 2026-03-23
 
-## 1. Router Mode Configuration
+---
 
-### 1.1 Mode Description
+## 1. Overview
 
-| Mode | Description | Use Case | Risk Level |
-|------|------|----------|----------|
-| `legacy` | Legacy direct router | Default mode, stable production deployment | 🟢 Low |
-| `dual` | Dual-rail mode (log comparison) | Gray test phase, record new/old router comparison | 🟡 Medium |
-| `router` | New root router | Full-scale mode after verification passes | 🟢 Low |
+This document describes the gray deployment and rollback procedures for router mode upgrades (v2.9.1+).
 
-### 1.2 Configuration Method
+---
+
+## 2. Router Mode Configuration
+
+### Mode Comparison
+
+| Mode | Description | Use Case | Risk |
+|------|-------------|----------|------|
+| `legacy` | Legacy direct routing | Default, stable production | 🟢 Low |
+| `dual` | Dual-track (log comparison) | Gray testing phase | 🟡 Medium |
+| `router` | New root router | Full deployment after validation | 🟢 Low |
+
+### Configuration
 
 ```bash
-# Temporary setting (command line)
+# Temporary (command line)
 ROUTER_MODE=legacy node scripts/start.mjs
 ROUTER_MODE=dual node scripts/start.mjs
 ROUTER_MODE=router node scripts/start.mjs
 
-# Permanent setting (.env file)
+# Permanent (.env file)
 echo "ROUTER_MODE=dual" >> .env
 ```
 
-### 1.3 Startup Log Examples
+### Startup Logs
 
 **Legacy Mode:**
 ```
@@ -34,8 +43,8 @@ echo "ROUTER_MODE=dual" >> .env
 **Dual Mode:**
 ```
 [Config] Router mode: dual
-[Config] Warning: Dual-rail mode: Will record new/old router comparison logs, does not change current behavior
-[Config] Note: To rollback to legacy router, set ROUTER_MODE=legacy and restart service
+[Config] ⚠️ Dual-track mode: Will record new/old router comparison logs
+[Config] 📝 To rollback to legacy router, set ROUTER_MODE=legacy and restart
 ```
 
 **Router Mode:**
@@ -43,40 +52,49 @@ echo "ROUTER_MODE=dual" >> .env
 [Config] Router mode: router
 ```
 
-## 2. Gray Acceptance Flow
+---
 
-### 2.1 Three-Phase Verification
+## 3. Gray Release Flow
 
-Follows strict three-phase verification flow to ensure rollback path is clear and controllable:
+### Three-Phase Verification
 
-```mermaid
-flowchart LR
-    A[Legacy Mode] -->|Start Verification| B[Dual Mode]
-    B -->|Observe 24h| C[Router Mode]
-    C -->|No Issues| D[Full Launch]
-    C -->|Issues| E[Immediate Rollback]
-    B -->|Issues| E
+```
+Legacy Mode → Dual Mode → Router Mode → Full Deployment
+              ↓              ↓
+           Observe 24h    No Issues
 ```
 
-**Phase 1: Legacy Verification**
-- Configuration: `ROUTER_MODE=legacy`
-- Verification content: Basic message flow, permission flow, card flow
-- Pass criteria: 53 unit tests 100% pass
+### Phase 1: Legacy Verification
 
-**Phase 2: Dual Verification**
-- Configuration: `ROUTER_MODE=dual`
-- Verification content: Dual-rail log comparison, behavior consistency
-- Key logs: `type: "[Router][dual]"` field completeness
-- Observation time: ≥ 24 hours
+| Item | Description |
+|------|-------------|
+| **Configuration** | `ROUTER_MODE=legacy` |
+| **Verification** | Basic message flow, permission flow, card flow |
+| **Pass Criteria** | 53 unit tests 100% pass |
 
-**Phase 3: Router Verification**
-- Configuration: `ROUTER_MODE=router`
-- Verification content: New router event distribution, functional equivalence
-- Pass criteria: Behavior consistent with legacy mode
+### Phase 2: Dual Verification
 
-### 2.2 Verification Suite
+| Item | Description |
+|------|-------------|
+| **Configuration** | `ROUTER_MODE=dual` |
+| **Verification** | Dual-track log comparison, behavior consistency |
+| **Key Logs** | `type: "[Router][dual]"` field completeness |
+| **Observation Time** | ≥ 24 hours |
 
-**Functional Verification:**
+### Phase 3: Router Verification
+
+| Item | Description |
+|------|-------------|
+| **Configuration** | `ROUTER_MODE=router` |
+| **Verification** | New router event distribution, functional equivalence |
+| **Pass Criteria** | Behavior consistent with legacy mode |
+
+---
+
+## 4. Verification Suite
+
+### Functional Verification
+
 - [ ] Private chat message send/receive
 - [ ] Group chat message send/receive
 - [ ] Permission card confirmation
@@ -84,29 +102,33 @@ flowchart LR
 - [ ] Message recall sync
 - [ ] Session binding migration
 
-**Performance Verification:**
+### Performance Verification
+
 - [ ] Message latency < 500ms
 - [ ] Error rate < 0.1%
 - [ ] Card.update success rate > 99%
 
-**Log Verification:**
-- [ ] Dual-rail log fields complete
+### Log Verification
+
+- [ ] Dual-track log fields complete
 - [ ] No abnormal error output
 
-## 3. Rollback SOP
+---
 
-### 3.1 Rollback Trigger Conditions
+## 5. Rollback SOP
+
+### Trigger Conditions
 
 Execute rollback immediately when any of the following occurs:
 
-| Trigger Condition | Response Level | Description |
-|----------|----------|------|
+| Condition | Level | Description |
+|-----------|-------|-------------|
 | Message latency > 2s | P0 | Seriously affects user experience |
 | Error rate > 5% | P0 | System abnormal rate too high |
-| Permission card/question card失效 | P0 | Severe functional degradation |
+| Permission/question card失效 | P0 | Severe functional degradation |
 | Session binding failure rate > 10% | P1 | Affects multi-session management |
 
-### 3.2 Rollback Steps
+### Rollback Steps
 
 ```bash
 # 1. Stop service
@@ -120,10 +142,10 @@ node scripts/start.mjs
 
 # 4. Verify rollback success
 grep "Router mode" logs/service.log
-# Expected output: [Config] Router mode: legacy
+# Expected: [Config] Router mode: legacy
 ```
 
-### 3.3 Post-Rollback Retest
+### Post-Rollback Retest
 
 Must verify after rollback:
 
@@ -133,9 +155,11 @@ Must verify after rollback:
 - [ ] Recall operation sync
 - [ ] Session binding function normal
 
-## 4. Log Diagnosis
+---
 
-### 4.1 Dual-Rail Log Format (dual mode)
+## 6. Log Diagnosis
+
+### Dual-Track Log Format (dual mode)
 
 ```json
 {
@@ -150,38 +174,46 @@ Must verify after rollback:
 }
 ```
 
-**Field Descriptions:**
-- `conversationKey`: Session key (format: `{platform}:{chatId}`)
-- `sessionId`: OpenCode session ID
-- `routeDecision`: Routing decision (p2p/group/card_action/opencode_event)
+### Field Descriptions
 
-### 4.2 Key Log Commands
+| Field | Description |
+|-------|-------------|
+| `conversationKey` | Session key (format: `{platform}:{chatId}`) |
+| `sessionId` | OpenCode session ID |
+| `routeDecision` | Routing decision (p2p/group/card_action/opencode_event) |
+
+### Diagnostic Commands
 
 ```bash
 # Check router mode
 grep "Router mode" logs/service.log
 
-# Check dual-rail logs (dual mode)
+# Check dual-track logs (dual mode)
 grep "\[Router\]\[dual\]" logs/service.log
 
 # Check error logs
 tail -n 100 logs/service.err | grep -i error
 ```
 
-## 5. Environment Variables Reference
+---
+
+## 7. Environment Variables Reference
 
 | Variable | Default | Description |
-|------|--------|------|
-| `ROUTER_MODE` | `legacy` | Router mode: legacy \| dual \| router |
-| `ENABLED_PLATFORMS` | * | Enabled platform list (comma-separated) |
+|----------|---------|-------------|
+| `ROUTER_MODE` | `legacy` | Router mode: `legacy` \| `dual` \| `router` |
+| `ENABLED_PLATFORMS` | `*` | Enabled platform list (comma-separated) |
 
-**Note**: `ROUTER_MODE` only accepts three values: `legacy`, `dual`, `router`; other values will fallback to `legacy`.
+**Note**: `ROUTER_MODE` only accepts three values: `legacy`, `dual`, `router`. Other values fallback to `legacy`.
 
-## 6. Related Documents
+---
 
-| Document Path | Description |
-|----------|------|
+## 8. Related Documentation
+
+| Document | Description |
+|----------|-------------|
 | `.sisyphus/evidence/task-16-rollout-gate.txt` | Three-phase verification evidence |
 | `.sisyphus/evidence/task-16-fallback-recovery.txt` | Detailed rollback SOP |
 | `src/config.ts` | Router mode configuration implementation |
 | `src/router/root-router.ts` | Root router implementation |
+| [Deployment Guide](deployment-en.md) | Service deployment and operations |

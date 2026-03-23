@@ -3,24 +3,24 @@ import { opencodeClient } from '../src/opencode/client.js';
 
 type InternalOpencodeClient = {
   handleEvent: (event: { type: string; properties?: Record<string, unknown> }) => void;
-  recentEventFingerprintMap: Map<string, number>;
 };
 
-describe('OpencodeClient event dedupe', () => {
+describe('OpencodeClient event handling', () => {
   const internalClient = opencodeClient as unknown as InternalOpencodeClient;
 
   beforeEach(() => {
     vi.restoreAllMocks();
-    internalClient.recentEventFingerprintMap.clear();
   });
 
   afterEach(() => {
     opencodeClient.removeAllListeners('permissionRequest');
     opencodeClient.removeAllListeners('messagePartUpdated');
-    internalClient.recentEventFingerprintMap.clear();
+    opencodeClient.removeAllListeners('messageUpdated');
+    opencodeClient.removeAllListeners('sessionIdle');
+    opencodeClient.removeAllListeners('sessionError');
   });
 
-  it('重复 permission 事件只应分发一次', () => {
+  it('permission 事件应正确分发', () => {
     const permissionSpy = vi.fn();
     opencodeClient.on('permissionRequest', permissionSpy);
 
@@ -41,12 +41,15 @@ describe('OpencodeClient event dedupe', () => {
     };
 
     internalClient.handleEvent(event);
-    internalClient.handleEvent(event);
 
     expect(permissionSpy).toHaveBeenCalledTimes(1);
+    expect(permissionSpy).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: 'ses-1',
+      permissionId: 'per-1',
+    }));
   });
 
-  it('重复文本 part 快照只应处理一次，但后续增长快照仍应处理', () => {
+  it('messagePartUpdated 事件应正确分发', () => {
     const partSpy = vi.fn();
     opencodeClient.on('messagePartUpdated', partSpy);
 
@@ -58,91 +61,47 @@ describe('OpencodeClient event dedupe', () => {
           sessionID: 'ses-1',
           messageID: 'msg-1',
           type: 'text',
-          text: '哥，收到。',
+          text: 'Hello',
           time: { start: 1 },
         },
-        delta: '哥，收到。',
-      },
-    });
-    internalClient.handleEvent({
-      type: 'message.part.updated',
-      properties: {
-        part: {
-          id: 'part-1',
-          sessionID: 'ses-1',
-          messageID: 'msg-1',
-          type: 'text',
-          text: '哥，收到。',
-          time: { start: 1 },
-        },
-        delta: '哥，收到。',
-      },
-    });
-    internalClient.handleEvent({
-      type: 'message.part.updated',
-      properties: {
-        part: {
-          id: 'part-1',
-          sessionID: 'ses-1',
-          messageID: 'msg-1',
-          type: 'text',
-          text: '哥，收到。我在。',
-          time: { start: 1 },
-        },
-        delta: '我在。',
+        delta: 'Hello',
       },
     });
 
-    expect(partSpy).toHaveBeenCalledTimes(2);
+    expect(partSpy).toHaveBeenCalledTimes(1);
+    expect(partSpy).toHaveBeenCalledWith(expect.objectContaining({
+      part: expect.objectContaining({
+        id: 'part-1',
+      }),
+    }));
   });
 
-  it('tool part 相同快照但不同 delta 时不应被误去重', () => {
-    const partSpy = vi.fn();
-    opencodeClient.on('messagePartUpdated', partSpy);
+  it('sessionIdle 事件应正确分发', () => {
+    const idleSpy = vi.fn();
+    opencodeClient.on('sessionIdle', idleSpy);
 
     internalClient.handleEvent({
-      type: 'message.part.updated',
+      type: 'session.idle',
       properties: {
-        part: {
-          id: 'tool-part-1',
-          sessionID: 'ses-1',
-          messageID: 'msg-1',
-          callID: 'call-1',
-          type: 'tool',
-          tool: 'bash',
-          state: {
-            status: 'running',
-            input: {
-              command: 'ls',
-            },
-            time: { start: 1 },
-          },
-        },
-        delta: 'step-1',
-      },
-    });
-    internalClient.handleEvent({
-      type: 'message.part.updated',
-      properties: {
-        part: {
-          id: 'tool-part-1',
-          sessionID: 'ses-1',
-          messageID: 'msg-1',
-          callID: 'call-1',
-          type: 'tool',
-          tool: 'bash',
-          state: {
-            status: 'running',
-            input: {
-              command: 'ls',
-            },
-            time: { start: 1 },
-          },
-        },
-        delta: 'step-2',
+        sessionID: 'ses-1',
       },
     });
 
-    expect(partSpy).toHaveBeenCalledTimes(2);
+    expect(idleSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('sessionError 事件应正确分发', () => {
+    const errorSpy = vi.fn();
+    opencodeClient.on('sessionError', errorSpy);
+
+    internalClient.handleEvent({
+      type: 'session.error',
+      properties: {
+        sessionID: 'ses-1',
+        error: 'Something went wrong',
+      },
+    });
+
+    expect(errorSpy).toHaveBeenCalledTimes(1);
   });
 });

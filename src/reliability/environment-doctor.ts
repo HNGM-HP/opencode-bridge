@@ -218,7 +218,7 @@ async function hasCommandInPath(command: string): Promise<boolean> {
     });
     return (result.stdout || '').trim().length > 0;
   } catch (error) {
-    console.error('[environment-doctor] command probe failed:', error instanceof Error ? error.message : String(error));
+    console.error('[EnvironmentDoctor] command probe failed:', error instanceof Error ? error.message : String(error));
     return false;
   }
 }

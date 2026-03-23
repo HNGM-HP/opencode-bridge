@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import fs from 'node:fs';
+import crypto from 'node:crypto';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
@@ -144,6 +145,8 @@ function run(command, args, title, options = {}) {
       cwd: rootDir,
       stdio: options.capture ? 'pipe' : 'inherit',
       encoding: options.capture ? 'utf-8' : undefined,
+      windowsHide: isWindows(),
+      timeout: options.timeout || 300000, // 默认 5 分钟超时
     });
 
     if (result.error) {
@@ -246,23 +249,6 @@ async function askYesNo(question, defaultYes = true) {
   }
 }
 
-async function askText(question) {
-  const shouldCreateReadline = activeReadline === null;
-  const rl = activeReadline || readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  });
-
-  try {
-    const answer = await rl.question(question);
-    return answer.trim();
-  } finally {
-    if (shouldCreateReadline) {
-      rl.close();
-    }
-  }
-}
-
 async function ensureNpm(options = {}) {
   const { silentReadyLog = false } = options;
   const npmVersion = getNpmVersion();
@@ -310,127 +296,12 @@ async function ensureRuntimeReady() {
   runtimeReady = true;
 }
 
-function isSkipInput(input) {
-  const normalized = input.trim().toLowerCase();
-  return ['skip', '回撤', '回撤跳过', '跳过', 'cancel', 'back'].includes(normalized);
-}
 
-function isPlaceholderCredentialValue(value) {
-  const normalized = value.trim().toLowerCase();
-  if (!normalized) {
-    return true;
-  }
-  if (normalized.includes('xxxx')) {
-    return true;
-  }
-  if (normalized.includes('your_')) {
-    return true;
-  }
-  return false;
-}
 
-function formatEnvValue(value) {
-  if (/^[A-Za-z0-9._:-]+$/.test(value)) {
-    return value;
-  }
-  const escaped = value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-  return `"${escaped}"`;
-}
 
-function upsertEnvEntry(content, key, value) {
-  const lines = content.split(/\r?\n/);
-  const pattern = new RegExp(`^\\s*(?:export\\s+)?${key}\\s*=`);
-  let replaced = false;
 
-  const nextLines = lines.map(line => {
-    if (pattern.test(line) && !replaced) {
-      replaced = true;
-      return `${key}=${formatEnvValue(value)}`;
-    }
-    return line;
-  });
 
-  if (!replaced) {
-    if (nextLines.length > 0 && nextLines[nextLines.length - 1].trim() !== '') {
-      nextLines.push('');
-    }
-    nextLines.push(`${key}=${formatEnvValue(value)}`);
-  }
 
-  return `${nextLines.join('\n').replace(/\n*$/, '')}\n`;
-}
-
-function needsFeishuCredentialSetup() {
-  const envValues = parseDotEnvFile();
-  const appId = (envValues.FEISHU_APP_ID || '').trim();
-  const appSecret = (envValues.FEISHU_APP_SECRET || '').trim();
-  return isPlaceholderCredentialValue(appId) || isPlaceholderCredentialValue(appSecret);
-}
-
-function updateEnvEntries(entries) {
-  if (!fs.existsSync(envPath)) {
-    return false;
-  }
-
-  let content = fs.readFileSync(envPath, 'utf-8');
-  for (const [key, value] of Object.entries(entries)) {
-    const normalizedValue = value.trim();
-    if (!normalizedValue) {
-      continue;
-    }
-    content = upsertEnvEntry(content, key, normalizedValue);
-  }
-
-  fs.writeFileSync(envPath, content, 'utf-8');
-  cachedDotEnv = null;
-  return true;
-}
-
-async function promptFeishuCredentialsSetup() {
-  if (!isInteractiveShell()) {
-    return;
-  }
-  if (!fs.existsSync(envPath)) {
-    return;
-  }
-  if (!needsFeishuCredentialSetup()) {
-    console.log('[deploy] 检测到 .env 已配置飞书凭据，可直接使用');
-    return;
-  }
-
-  console.log('\n[deploy] 可选：现在写入飞书凭据（后续仍可手动编辑 .env）');
-  const shouldSetup = await askYesNo('[deploy] 是否现在填写 FEISHU_APP_ID 和 FEISHU_APP_SECRET？[Y/n]: ', true);
-  if (!shouldSetup) {
-    console.log('[deploy] 已跳过飞书凭据写入，可后续手动编辑 .env');
-    return;
-  }
-
-  const appIdInput = await askText('[deploy] 输入 FEISHU_APP_ID（输入“回撤”或“skip”跳过）: ');
-  const appSecretInput = await askText('[deploy] 输入 FEISHU_APP_SECRET（输入“回撤”或“skip”跳过）: ');
-
-  const updates = {};
-  if (appIdInput && !isSkipInput(appIdInput)) {
-    updates.FEISHU_APP_ID = appIdInput;
-  }
-  if (appSecretInput && !isSkipInput(appSecretInput)) {
-    updates.FEISHU_APP_SECRET = appSecretInput;
-  }
-
-  const updateKeys = Object.keys(updates);
-  if (updateKeys.length === 0) {
-    console.log('[deploy] 未写入任何飞书凭据（已回撤/跳过）');
-    return;
-  }
-
-  const updated = updateEnvEntries(updates);
-  if (!updated) {
-    console.warn('[deploy] 未找到 .env，跳过飞书凭据写入');
-    return;
-  }
-
-  console.log(`[deploy] 已写入 .env: ${updateKeys.join(', ')}`);
-  console.log('[deploy] 提醒：后续可随时手动编辑 .env 更新配置');
-}
 
 function parseDotEnvFile() {
   if (!fs.existsSync(envPath)) {
@@ -638,19 +509,21 @@ async function installOrUpgradeOpencode() {
 
 function ensureEnvFile() {
   cachedDotEnv = null;
+  const envBackupPath = path.join(rootDir, '.env.backup');
 
   if (fs.existsSync(envPath)) {
-    return;
+    const rawContent = fs.readFileSync(envPath, 'utf-8');
+    if (rawContent.includes('FEISHU_APP_ID') || rawContent.includes('ALLOWED_USERS')) {
+      fs.renameSync(envPath, envBackupPath);
+      console.log('[deploy] 📦 检测到旧版本全量 .env 文件，已自动备份为 .env.backup，将在主程序启动时顺滑迁移至 SQLite。');
+    } else {
+      return;
+    }
   }
 
-  if (fs.existsSync(envExamplePath)) {
-    fs.copyFileSync(envExamplePath, envPath);
-    cachedDotEnv = null;
-    console.log('[deploy] 已创建 .env（来自 .env.example），请按需修改配置');
-    return;
-  }
-
-  console.warn('[deploy] 未找到 .env 与 .env.example，请手动创建 .env');
+  const pureEnvContent = `ADMIN_PORT=4098\n`;
+  fs.writeFileSync(envPath, pureEnvContent, 'utf-8');
+  console.log('[deploy] 📄 已生成极简版 .env 文件。首次访问 Web 管理面板时需设置管理员密码。');
 }
 
 function ensureLogDir() {
@@ -783,9 +656,36 @@ async function runBeginnerGuide() {
 
   await deployProject();
 
-  console.log('\n[deploy] 首次引导完成，建议按顺序继续：');
-  console.log('  1) 菜单执行「启动 OpenCode CLI（自动写入 server 配置）」');
-  console.log('  2) 菜单执行「启动后台进程（通用）」');
+  console.log('\n[deploy] 🎉 引导完成！');
+
+  // 读取生成的 .env 文件获取面板信息
+  const envConfig = parseDotEnvFile();
+  const adminPort = envConfig.ADMIN_PORT || '4098';
+  const adminPassword = envConfig.ADMIN_PASSWORD || '未设置';
+
+  // 获取本机局域网 IP
+  const interfaces = os.networkInterfaces();
+  let lanIp = 'localhost';
+  for (const iface of Object.values(interfaces)) {
+    if (!iface) continue;
+    for (const alias of iface) {
+      if (alias.family === 'IPv4' && !alias.internal) {
+        lanIp = alias.address;
+        break;
+      }
+    }
+    if (lanIp !== 'localhost') break;
+  }
+
+  console.log('\n📋 后续步骤：\n');
+  console.log('1️⃣  启动服务：在菜单中选择「2) 启动后台进程」');
+  console.log('2️⃣  访问配置面板：使用浏览器访问下方地址');
+  console.log(`    🔗 http://${lanIp}:${adminPort}`);
+  console.log(`    🔑 管理员密码：${adminPassword}`);
+  console.log('\n3️⃣  在 Web 面板中配置飞书 App ID / App Secret 等平台凭据');
+  console.log('4️⃣  保存配置后服务会自动提示是否需要重启\n');
+  console.log('💡 提示：所有配置项（飞书、Discord、高可用、Cron 任务等）');
+  console.log('   均可在 Web 可视化面板中完成，无需再手动编辑 .env 文件！\n');
 }
 
 function getBridgeTemplateFiles() {
@@ -898,12 +798,37 @@ async function deployProject(options = {}) {
   console.log('\n[deploy] OpenCode 环境预检（仅提示，不阻断部署）');
   await checkOpencodeEnvironment({ warnOnly: true });
 
-  run('npm', ['install', '--include=dev'], '安装依赖');
-  run('npm', ['run', 'build'], '编译项目');
+  // 根据时区判断是否使用国内镜像（仅当用户未设置 PUPPETEER_DOWNLOAD_HOST 时）
+  const originalPuppeteerHost = process.env.PUPPETEER_DOWNLOAD_HOST;
+  let puppeteerHostSet = false;
+
+  if (!originalPuppeteerHost) {
+    const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+    const isChinaRegion = timezone.startsWith('Asia/Shanghai')
+      || timezone.startsWith('Asia/Chongqing')
+      || timezone.startsWith('Asia/Hong_Kong')
+      || timezone.startsWith('Asia/Taipei')
+      || timezone.startsWith('Asia/Macau');
+
+    if (isChinaRegion) {
+      process.env.PUPPETEER_DOWNLOAD_HOST = 'https://cdn.npmmirror.com/binaries/chrome-for-testing';
+      puppeteerHostSet = true;
+    }
+  }
+
+  try {
+    run('npm', ['install', '--include=dev'], '安装后端依赖');
+  } finally {
+    if (puppeteerHostSet) {
+      delete process.env.PUPPETEER_DOWNLOAD_HOST;
+    }
+  }
+
+  run('npm', ['run', 'build:web'], '编译前端控制台');
+  run('npm', ['run', 'build'], '编译后端服务');
   syncBridgeAgents();
 
   ensureEnvFile();
-  await promptFeishuCredentialsSetup();
 
   console.log('\n[deploy] 部署完成');
 }
@@ -912,8 +837,105 @@ function startBackgroundProcess() {
   run(process.execPath, [path.join(scriptDir, 'start.mjs')], '启动后台进程');
 }
 
-function stopBackgroundProcess() {
-  run(process.execPath, [path.join(scriptDir, 'stop.mjs')], '停止后台进程', { allowFailure: true });
+async function stopBackgroundProcess(rl) {
+  // 检测是否有 OpenCode 进程
+  const opencodePids = findOpenCodeProcesses();
+
+  if (opencodePids.length > 0) {
+    console.log(`[deploy] 检测到 ${opencodePids.length} 个 OpenCode 进程: ${opencodePids.join(', ')}`);
+    const answer = await rl.question('是否同时终止 OpenCode 进程? (y/N): ');
+    const shouldStopOpenCode = answer.toLowerCase() === 'y' || answer.toLowerCase() === 'yes';
+
+    if (shouldStopOpenCode) {
+      run(process.execPath, [path.join(scriptDir, 'stop.mjs'), '--with-opencode'], '停止后台进程（含 OpenCode）', { allowFailure: true });
+    } else {
+      run(process.execPath, [path.join(scriptDir, 'stop.mjs')], '停止后台进程', { allowFailure: true });
+    }
+  } else {
+    run(process.execPath, [path.join(scriptDir, 'stop.mjs')], '停止后台进程', { allowFailure: true });
+  }
+}
+
+function findOpenCodeProcesses() {
+  const pids = [];
+  const currentPid = process.pid;
+
+  if (isLinux() || process.platform === 'darwin') {
+    const result = spawnSync('ps', ['aux'], { encoding: 'utf-8' });
+    if (!result.error && result.status === 0) {
+      const lines = result.stdout.split('\n').filter(line => line.trim());
+      for (const line of lines) {
+        const parts = line.split(/\s+/);
+        if (parts.length < 11) continue;
+        const pid = parseInt(parts[1], 10);
+        if (isNaN(pid) || pid === currentPid || pid === 1) continue;
+        const command = parts.slice(10).join(' ');
+        // 匹配 opencode 进程（排除 bridge 自身）
+        if (/\bopencode\b/.test(command) && !command.includes('feishu-opencode-bridge')) {
+          pids.push(pid);
+        }
+      }
+    }
+  } else if (isWindows()) {
+    const result = spawnSync('tasklist', ['/FO', 'CSV', '/NH'], { encoding: 'utf-8', windowsHide: true });
+    if (!result.error && result.status === 0) {
+      const lines = result.stdout.split('\r\n').filter(line => line.trim());
+      for (const line of lines) {
+        const match = line.match(/"node\.exe","(\d+)"/);
+        if (match) {
+          const pid = parseInt(match[1], 10);
+          if (pid === currentPid) continue;
+          // Windows 下使用 PowerShell 获取命令行（兼容 Windows 11）
+          const cmd = getProcessCommandLine(pid);
+          if (cmd && /\bopencode\b/.test(cmd) && !cmd.includes('feishu-opencode-bridge')) {
+            pids.push(pid);
+          }
+        }
+      }
+    }
+  }
+
+  return pids;
+}
+
+function getProcessCommandLine(pid) {
+  // 优先使用 PowerShell（Windows 11 兼容）
+  const psResult = spawnSync('powershell', [
+    '-NoProfile',
+    '-Command',
+    `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").CommandLine`
+  ], {
+    encoding: 'utf-8',
+    timeout: 5000,
+    windowsHide: true,
+  });
+
+  if (!psResult.error && psResult.status === 0) {
+    const cmd = (psResult.stdout || '').trim();
+    if (cmd) {
+      return cmd;
+    }
+  }
+
+  // 回退到 wmic（旧版 Windows）
+  const wmicResult = spawnSync('wmic', [
+    'process', 'where', `ProcessId=${pid}`,
+    'get', 'CommandLine', '/value'
+  ], {
+    encoding: 'utf-8',
+    timeout: 5000,
+    windowsHide: true,
+  });
+
+  if (!wmicResult.error && wmicResult.status === 0) {
+    const output = wmicResult.stdout || '';
+    const match = output.match(/CommandLine=(.+)/);
+    if (match) {
+      return match[1].trim();
+    }
+  }
+
+  return null;
 }
 
 function uninstallBackgroundProcess() {
@@ -956,6 +978,22 @@ function cleanupForCleanInstall(contextLabel) {
     removedTargets.push('node_modules');
   }
 
+  // 中国地区用户清理可能损坏的 puppeteer 浏览器缓存（国内网络下载易失败）
+  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+  const isChinaRegion = timezone.startsWith('Asia/Shanghai')
+    || timezone.startsWith('Asia/Chongqing')
+    || timezone.startsWith('Asia/Hong_Kong')
+    || timezone.startsWith('Asia/Taipei')
+    || timezone.startsWith('Asia/Macau');
+
+  if (isChinaRegion) {
+    const puppeteerCacheDir = path.join(os.homedir(), '.cache', 'puppeteer');
+    if (fs.existsSync(puppeteerCacheDir)) {
+      fs.rmSync(puppeteerCacheDir, { recursive: true, force: true });
+      removedTargets.push('~/.cache/puppeteer');
+    }
+  }
+
   const removedTarballs = cleanupPackageTarballs();
   if (removedTarballs > 0) {
     removedTargets.push(`npm 打包产物(${removedTarballs})`);
@@ -966,7 +1004,7 @@ function cleanupForCleanInstall(contextLabel) {
     removedTargets.push('logs/bridge.pid');
   }
 
-  const preservedTargets = ['.env', '.env.example', 'cron/', '.chat-sessions.json', '.user-sessions.json', 'logs/', 'scripts/'];
+  const preservedTargets = ['.env', '.env.example', 'cron/', 'data/', '.chat-sessions.json', '.user-sessions.json', 'logs/', 'scripts/'];
   console.log(`[deploy] ${contextLabel}默认采用清洁安装：已清理 ${removedTargets.join('、') || '无旧产物可清理'}`);
   console.log(`[deploy] 已保留用户文件: ${preservedTargets.join('、')}`);
 }
@@ -1139,6 +1177,63 @@ function printLinuxStatus() {
   if (fs.existsSync(pidFile)) {
     console.log(`[deploy] 后台进程 PID 文件: ${pidFile}`);
   }
+
+  const port = getRuntimeEnvValue('ADMIN_PORT') || '4098';
+  console.log(`[deploy] 🌐 Web 管理中心监听端口: ${port} `);
+  console.log(`[deploy] 提示: 若服务正在运行，请使用浏览器访问 http://<机器IP>:${port}`);
+}
+
+// ──────────────────────────────────────────────
+// 重置管理员密码
+// ──────────────────────────────────────────────
+
+function resolveDataDir() {
+  const explicit = process.env.OPENCODE_BRIDGE_CONFIG_DIR?.trim();
+  if (explicit) {
+    return path.resolve(explicit);
+  }
+  return path.join(rootDir, 'data');
+}
+
+async function resetAdminPassword() {
+  const dataDir = resolveDataDir();
+  const dbPath = path.join(dataDir, 'config.db');
+
+  if (!fs.existsSync(dbPath)) {
+    console.log('[deploy] 数据库文件不存在，密码将在首次启动时从 .env 初始化');
+    return;
+  }
+
+  // 生成新密码
+  const newPassword = crypto.randomBytes(8).toString('hex');
+
+  // 使用 better-sqlite3 直接操作数据库
+  try {
+    // 动态导入 better-sqlite3
+    const Database = (await import('better-sqlite3')).default;
+    const db = new Database(dbPath);
+
+    // 更新密码并清除 password_changed_at（强制用户再次修改）
+    db.prepare(`
+      INSERT INTO admin_meta (key, value) VALUES ('admin_password', ?)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value
+    `).run(newPassword);
+
+    db.prepare(`
+      INSERT INTO admin_meta (key, value) VALUES ('password_changed_at', ?)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value
+    `).run(new Date().toISOString());
+
+    db.close();
+
+    console.log(`[deploy] ✅ 管理员密码已重置为: ${newPassword}`);
+    console.log('[deploy] 请使用新密码登录 Web 管理面板');
+    console.log('[deploy] 登录后系统会要求您修改密码');
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`[deploy] 重置密码失败: ${message}`);
+    console.error('[deploy] 请确保服务已停止后重试');
+  }
 }
 
 async function showMenu() {
@@ -1150,34 +1245,24 @@ async function showMenu() {
 
   try {
     await ensureRuntimeReady();
-    await checkOpencodeEnvironment();
 
     while (true) {
       console.log('\n========== Feishu OpenCode Bridge ==========');
       if (isLinux()) {
-        console.log('1) 一键部署（默认清洁安装，保留 .env/cron 等用户数据）');
-        console.log('2) 启动后台进程（通用）');
-        console.log('3) 停止后台进程（通用）');
-        console.log('4) 安装并启动 systemd 服务（常驻）');
-        console.log('5) 停止并禁用 systemd 服务');
-        console.log('6) 卸载 systemd 服务');
-        console.log('7) 查看运行状态');
-        console.log('8) 一键更新升级（默认清洁升级，保留 .env/cron 等用户数据）');
-        console.log('9) 安装/升级 OpenCode（npm i -g opencode-ai）');
-        console.log('10) 检查 OpenCode 环境（安装与端口）');
-        console.log('11) 启动 OpenCode CLI（自动写入 server 配置）');
-        console.log('12) 首次引导（推荐）');
-        console.log('0) 退出');
-      } else {
-        console.log('1) 一键部署（默认清洁安装，保留 .env/cron 等用户数据）');
+        console.log('1) 一键部署');
         console.log('2) 启动后台进程');
         console.log('3) 停止后台进程');
-        console.log('4) 卸载后台进程（停止并清理日志/PID）');
-        console.log('5) 一键更新升级（默认清洁升级，保留 .env/cron 等用户数据）');
-        console.log('6) 安装/升级 OpenCode（npm i -g opencode-ai）');
-        console.log('7) 检查 OpenCode 环境（安装与端口）');
-        console.log('8) 启动 OpenCode CLI（自动写入 server 配置）');
-        console.log('9) 首次引导（推荐）');
+        console.log('4) 安装 systemd 服务');
+        console.log('5) 停止 systemd 服务');
+        console.log('6) 卸载 systemd 服务');
+        console.log('7) 查看运行状态');
+        console.log('8) 重置管理员密码');
+        console.log('0) 退出');
+      } else {
+        console.log('1) 一键部署');
+        console.log('2) 启动后台进程');
+        console.log('3) 停止后台进程');
+        console.log('4) 重置管理员密码');
         console.log('0) 退出');
       }
 
@@ -1193,7 +1278,7 @@ async function showMenu() {
               startBackgroundProcess();
               break;
             case '3':
-              stopBackgroundProcess();
+              await stopBackgroundProcess(rl);
               break;
             case '4':
               await installSystemdService();
@@ -1208,19 +1293,7 @@ async function showMenu() {
               printLinuxStatus();
               break;
             case '8':
-              await upgradeProject();
-              break;
-            case '9':
-              await installOrUpgradeOpencode();
-              break;
-            case '10':
-              await runOpencodeCheck();
-              break;
-            case '11':
-              await startOpencodeCliWithManagedConfig();
-              break;
-            case '12':
-              await runBeginnerGuide();
+              await resetAdminPassword();
               break;
             case '0':
               return;
@@ -1236,25 +1309,10 @@ async function showMenu() {
               startBackgroundProcess();
               break;
             case '3':
-              stopBackgroundProcess();
+              await stopBackgroundProcess(rl);
               break;
             case '4':
-              uninstallBackgroundProcess();
-              break;
-            case '5':
-              await upgradeProject();
-              break;
-            case '6':
-              await installOrUpgradeOpencode();
-              break;
-            case '7':
-              await runOpencodeCheck();
-              break;
-            case '8':
-              await startOpencodeCliWithManagedConfig();
-              break;
-            case '9':
-              await runBeginnerGuide();
+              await resetAdminPassword();
               break;
             case '0':
               return;
@@ -1276,21 +1334,16 @@ async function showMenu() {
 function printUsage() {
   console.log('用法: node scripts/deploy.mjs [action]');
   console.log('可选 action:');
-  console.log('  deploy                一键部署（默认清洁安装，保留 .env/cron 等用户数据）');
-  console.log('  upgrade               一键更新升级（默认清洁升级，保留 .env/cron 等用户数据）');
-  console.log('  opencode-install      安装/升级 OpenCode（npm i -g opencode-ai）');
-  console.log('  opencode-check        检查 OpenCode 安装与端口状态');
-  console.log('  opencode-start        启动 OpenCode CLI（自动写入 server 配置）');
-  console.log('  guide                 首次引导（推荐）');
-  console.log('  start                 启动后台进程');
-  console.log('  stop                  停止后台进程');
-  console.log('  uninstall             卸载后台进程（停止并清理日志/PID）');
-  console.log('  menu                  打开交互菜单（默认）');
+  console.log('  deploy           一键部署');
+  console.log('  start            启动后台进程');
+  console.log('  stop             停止后台进程');
+  console.log('  reset-password   重置管理员密码');
+  console.log('  menu             打开交互菜单（默认）');
   if (isLinux()) {
-    console.log('  service-install       安装并启动 systemd 服务');
-    console.log('  service-disable       停止并禁用 systemd 服务');
-    console.log('  service-uninstall     卸载 systemd 服务');
-    console.log('  status                查看 systemd/进程状态');
+    console.log('  service-install  安装并启动 systemd 服务');
+    console.log('  service-disable  停止并禁用 systemd 服务');
+    console.log('  service-uninstall 卸载 systemd 服务');
+    console.log('  status           查看运行状态');
   }
 }
 
@@ -1305,31 +1358,18 @@ async function main() {
       case 'deploy':
         await deployProject();
         break;
-      case 'upgrade':
-      case 'update':
-        await upgradeProject();
-        break;
-      case 'opencode-install':
-        await installOrUpgradeOpencode();
-        break;
-      case 'opencode-check':
-        await runOpencodeCheck();
-        break;
-      case 'opencode-start':
-        await startOpencodeCliWithManagedConfig();
-        break;
-      case 'guide':
-        await runBeginnerGuide();
-        break;
       case 'start':
         startBackgroundProcess();
         break;
-      case 'stop':
-        stopBackgroundProcess();
+      case 'stop': {
+        const withOpenCode = process.argv.includes('--with-opencode');
+        if (withOpenCode) {
+          run(process.execPath, [path.join(scriptDir, 'stop.mjs'), '--with-opencode'], '停止后台进程（含 OpenCode）', { allowFailure: true });
+        } else {
+          run(process.execPath, [path.join(scriptDir, 'stop.mjs')], '停止后台进程', { allowFailure: true });
+        }
         break;
-      case 'uninstall':
-        uninstallBackgroundProcess();
-        break;
+      }
       case 'service-install':
         await installSystemdService();
         break;
@@ -1341,6 +1381,9 @@ async function main() {
         break;
       case 'status':
         printLinuxStatus();
+        break;
+      case 'reset-password':
+        await resetAdminPassword();
         break;
       case 'help':
       case '--help':

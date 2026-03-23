@@ -1,332 +1,154 @@
-# Feishu / Discord × OpenCode 桥接服务 v2.9.1
+# OpenCode Bridge
 
-[![v2.9.1](https://img.shields.io/badge/v2.9.1-3178C6)]()
+[![v2.9.5](https://img.shields.io/badge/v2.9.5-3178C6)]()
 [![Node.js >= 18](https://img.shields.io/badge/Node.js-%3E%3D18-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![License: GPLv3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 
-**[中文](README.md)** | **[English](README-en.md)**
+**[中文](README.md) | [English](README-en.md)**
 
 ---
 
-不只服务飞书，也服务 Discord。通过"平台适配层 + 根路由器 + OpenCode 事件中枢 + 领域处理器"，重点解决跨平台扩展、权限闭环稳定性、目录实例一致性和线上可维护性。
+> **OpenCode Bridge** 是一款企业级 AI 编程协作桥接服务，将 OpenCode（AI 编程助手）无缝接入主流即时通讯平台，实现跨平台、跨设备的智能编程协作体验。
 
-随着运行时 Cron（API + `/cron` + `///cron` + 自然语言语义解析）与本地可靠性治理落地，本项目和 OpenClaw 在"自动化调度 + 运维可用性"上的能力差距进一步缩小，同时保留本项目在多平台路由与权限闭环上的工程优势。
+---
 
-这个项目解决的不是"能不能回复消息"，而是"跨平台 AI 任务能否长期稳定闭环"。
-## 📋 目录
+## 📱 支持平台
 
-- [为什么用它](#为什么用它)
-- [能力总览](#能力总览)
-- [效果演示](#效果演示)
-- [架构概览](#架构概览)
-- [快速开始](#快速开始)
-- [部署与运维](#部署与运维)
-- [环境变量](#环境变量)
-- [可靠性能力](#可靠性能力)
-- [飞书后台配置](#飞书后台配置)
-- [命令速查](#命令速查)
-- [Agent 使用](#agent使用)
-- [详细文档](#详细文档)
+| 平台 | 状态 | 核心特性 |
+|------|------|----------|
+| 飞书 (Lark) | ✅ 完整支持 | 卡片交互、流式输出、权限确认、文件传输、撤回同步 |
+| Discord | ✅ 完整支持 | 组件交互、Embed 消息、Slash 命令、频道管理 |
+| 企业微信 (WeCom) | ✅ 完整支持 | 文本交互、消息收发 |
+| Telegram | ✅ 完整支持 | 文本交互、Inline 键盘 |
+| QQ (OneBot) | ✅ 完整支持 | 文本交互、群聊支持 |
+| WhatsApp | ✅ 完整支持 | 文本交互、媒体消息 |
+| 个人微信 | ✅ 完整支持 | 扫码登录、文本交互 |
 
-<a id="为什么用它"></a>
-## 💡为什么用它
+---
 
-- 对使用者友好：权限确认、question 作答、会话操作都在飞书里完成，不强依赖本地终端。
-- 对协作友好：支持绑定已有会话与迁移绑定，跨设备、跨群接力时上下文不断裂。
-- 对稳定性友好：会话映射持久化 + 双端撤回 + 同规则清理，避免"表面正常、状态错位"。
-- 对运维友好：内置部署、升级、状态检查与后台管理流程，适合持续托管运行。
-- 对监控友好：内置cron定时任务与主动心跳，可以做到像OpenClaw类似的能力。
-- 对未来版本友好：已兼容 OpenCode Server Basic Auth，服务端启用密码后仍可直接接入。
+## ✨ 核心特性
 
-<a id="能力总览"></a>
-## 📸 能力总览
+### 🔄 智能会话管理
+- **独立会话绑定**：每个群聊/私聊独立绑定 OpenCode 会话，上下文互不干扰
+- **会话迁移**：支持会话绑定、迁移、重命名，跨设备接力不断裂
+- **多项目支持**：支持多项目目录切换，项目别名配置
+- **自动清理**：自动清理无效会话，防止资源泄漏
 
-| 能力 | 你能得到什么 | 相关命令/配置 |
-|---|---|---|
-| 群聊/私聊统一路由 | 同一套入口支持私聊和群聊，按映射路由到正确会话 | 群聊 @ 机器人；私聊直接发消息 |
-| 私聊建群会话选择 | 建群时可选"新建会话/绑定已有会话"，提交时按选择生效 | `/create_chat`、`/建群` |
-| 手动会话绑定 | 不中断旧上下文，直接把指定 session 接入当前群 | `/session <sessionId>`、`ENABLE_MANUAL_SESSION_BIND` |
-| 迁移绑定与删除保护 | 绑定已有会话时自动迁移旧群映射，并保护会话不被误删 | 自动生效（手动绑定场景） |
-| 生命周期清理兜底 | 启动清理与手动清理共用同一规则，降低误清理概率 | `/clear free session` |
-| 权限卡片闭环 | OpenCode 权限请求在飞书内完成确认并回传结果 | `permission.asked` |
-| question 卡片闭环 | OpenCode question 在飞书内回答/跳过并继续任务 | `question.asked` |
-| 流式多卡防溢出 | 超过组件预算自动分页拆卡，旧页持续更新 | 流式卡片分页（预算 180） |
-| 双端撤回一致性 | 撤回时同时回滚飞书消息与 OpenCode 会话状态 | `/undo` |
-| 模型/角色/强度可视化控制 | 按会话切换模型、角色与推理强度，支持面板查看与命令操作 | `/panel`、`/model`、`/agent`、`/effort` |
-| 上下文压缩 | 在飞书直接触发会话 summarize，释放上下文窗口 | `/compact` |
-| Shell 命令透传 | 白名单 `!` 命令通过 OpenCode shell 执行并回显输出 | `!ls`、`!pwd`、`!git status` |
-| 服务端鉴权兼容 | 支持 OpenCode Server Basic Auth，不怕后续默认强制密码 | `OPENCODE_SERVER_USERNAME`、`OPENCODE_SERVER_PASSWORD` |
-| 文件发送到飞书 | AI 可将电脑上的文件/截图直接发送到当前飞书群聊 | `/send`、`发送文件` |
-| 工作目录/项目管理 | 创建会话时指定工作目录，支持项目别名、群默认项目、9 阶段安全校验 | `/project list`、`/session new <别名>`、`ALLOWED_DIRECTORIES` |
-| OpenCode 本地可靠性治理 | 运行时 Cron（API/命令/自然语言）+ 本地宕机自动救援（含配置备份/两级回退）+ 可选主动心跳 | `HEARTBEAT.md`、`RELIABILITY_*`、`logs/reliability-audit.jsonl` |
-| 部署运维闭环 | 提供部署/升级/检查/后台/systemd 的一体化入口 | `scripts/deploy.*`、`scripts/start.*` |
+### 🤖 AI 交互能力
+- **流式输出**：实时显示 AI 响应，支持思维链展示
+- **权限交互**：AI 权限请求在聊天平台内完成确认
+- **问题回答**：AI 提问在聊天平台内完成作答
+- **文件传输**：AI 可将文件/截图发送到聊天平台
+- **Shell 透传**：白名单命令可直接在聊天中执行
 
-<a id="效果演示"></a>
-## 🖼️ 效果演示
+### 🛡️ 可靠性保障
+- **心跳监控**：定时探测 OpenCode 健康状态
+- **自动救援**：OpenCode 宕机时自动重启恢复
+- **Cron 任务**：支持运行时动态管理定时任务
+- **日志审计**：完整的操作日志和错误追踪
 
-<details>
-<summary>Step 1：私聊独立会话（点击展开）</summary>
+### 🎛️ Web 管理面板
+- **可视化配置**：浏览器实时修改所有配置参数
+- **平台管理**：查看各平台连接状态
+- **Cron 管理**：创建、启用/禁用、删除定时任务
+- **服务控制**：查看服务状态、远程重启
 
-<p>
-  <img src="assets/demo/1-1私聊独立会话.png" width="720" />
-  <img src="assets/demo/1-2私聊独立会话.png" width="720" />
-  <img src="assets/demo/1-3私聊独立会话.png" width="720" />
-  <img src="assets/demo/1-4私聊独立会话.png" width="720" />
-</p>
+---
 
-</details>
-
-<details>
-<summary>Step 2：多群聊独立会话（点击展开）</summary>
-
-<p>
-  <img src="assets/demo/2-1多群聊独立会话.png" width="720" />
-  <img src="assets/demo/2-2多群聊独立会话.png.png" width="720" />
-  <img src="assets/demo/2-3多群聊独立会话.png.png" width="720" />
-</p>
-
-</details>
-
-<details>
-<summary>Step 3：图片附件解析（点击展开）</summary>
-
-<p>
-  <img src="assets/demo/3-1图片附件解析.png" width="720" />
-  <img src="assets/demo/3-2图片附件解析.png.png" width="720" />
-  <img src="assets/demo/3-3图片附件解析.png.png" width="720" />
-</p>
-
-</details>
-
-<details>
-<summary>Step 4：交互工具测试（点击展开）</summary>
-
-<p>
-  <img src="assets/demo/4-1交互工具测试.png" width="720" />
-  <img src="assets/demo/4-2交互工具测试.png.png" width="720" />
-</p>
-
-</details>
-
-<details>
-<summary>Step 5：底层权限测试（点击展开）</summary>
-
-<p>
-  <img src="assets/demo/5-1底层权限测试.png" width="720" />
-  <img src="assets/demo/5-2底层权限测试.png.png" width="720" />
-  <img src="assets/demo/5-3底层权限测试.png.png" width="720" />
-  <img src="assets/demo/5-4底层权限测试.png.png" width="720" />
-</p>
-
-</details>
-
-<details>
-<summary>Step 6：会话清理（点击展开）</summary>
-
-<p>
-  <img src="assets/demo/6-1会话清理.png" width="720" />
-  <img src="assets/demo/6-2会话清理.png.png" width="720" />
-  <img src="assets/demo/6-3会话清理.png.png" width="720" />
-</p>
-
-</details>
-
-<a id="架构概览"></a>
-## 📌 架构概览
-
-详见 [项目架构文档](assets/docs/architecture.md)。
-
-核心分层：
-- **平台接入层**：Feishu Adapter / Discord Adapter
-- **入口与路由层**：RootRouter / DiscordHandler
-- **领域服务层**：PermissionHandler / QuestionHandler / OutputBuffer / ChatSessionStore
-- **OpenCode 集成层**：OpencodeClientWrapper / OpenCodeEventHub
-
-<a id="快速开始"></a>
 ## 🚀 快速开始
 
-### 1) 先执行这一条命令（首选）
-
-Linux/macOS：
+### 1. 克隆项目
 
 ```bash
 git clone https://github.com/HNGM-HP/opencode-bridge.git
 cd opencode-bridge
+```
+
+### 2. 一键部署
+
+**Linux/macOS:**
+```bash
 chmod +x ./scripts/deploy.sh
 ./scripts/deploy.sh guide
 ```
 
-Windows PowerShell：
-
+**Windows PowerShell:**
 ```powershell
-git clone https://github.com/HNGM-HP/opencode-bridge.git
-cd opencode-bridge
 .\scripts\deploy.ps1 guide
 ```
 
-这条命令会自动完成：
-- 检测 Node.js / npm（缺失时给安装引导）
-- 检测 OpenCode 安装与端口状态
-- 可一键安装 OpenCode（`npm i -g opencode-ai`）
-- 安装项目依赖并编译桥接服务
-- 若 `.env` 不存在，会自动由 `.env.example` 复制生成（不会覆盖已有 `.env`）
-- 可在交互阶段直接输入 `FEISHU_APP_ID` / `FEISHU_APP_SECRET` 并写入 `.env`（支持回撤/跳过）
+该命令会自动完成：
+- 检测并引导安装 Node.js
+- 检测并引导安装 OpenCode
+- 安装项目依赖并编译
+- 生成初始配置文件
 
-**提醒**：
-- 不添加 `guide` 后缀执行命令为菜单。
-- 这一条命令可以完成"部署与环境准备"。
-- 但飞书密钥需要你自己填，脚本不会替你写入真实凭据；未填写时服务无法正常接收飞书消息。
+### 3. 启动服务
 
-### 2) 填写飞书配置（必须，若上一步已输入可跳过）
-
-```bash
-cp .env.example .env
-```
-
-至少填写：
-- `FEISHU_APP_ID`
-- `FEISHU_APP_SECRET`
-
-### 3) 启动 OpenCode（保留 CLI 界面）
-
-```bash
-opencode
-```
-
-### 4) 启动桥接服务
-
-Linux/macOS：
-
+**Linux/macOS:**
 ```bash
 ./scripts/start.sh
 ```
 
-Windows PowerShell：
-
+**Windows PowerShell:**
 ```powershell
 .\scripts\start.ps1
 ```
 
-开发调试可用：
-
+**开发模式:**
 ```bash
 npm run dev
 ```
 
-### 5）npm CLI 安装（更适合本地常驻运行场景）
+### 4. 配置平台
 
-```bash
-npm install -g opencode-bridge
-opencode-bridge
+服务启动后，访问 Web 配置面板完成平台配置：
+
+```
+http://localhost:4098
 ```
 
-配置的详细说明见 [部署与运维文档](assets/docs/deployment.md)。
+首次访问时会提示设置管理密码。
 
-<a id="部署与运维"></a>
-## 💻 部署与运维
+---
 
-### 已安装 Node 后可用命令
-
-| 目标 | 命令 | 说明 |
-|---|---|---|
-| 一键部署 | `node scripts/deploy.mjs deploy` | 默认清洁安装后再安装依赖并编译 |
-| 一键更新升级 | `node scripts/deploy.mjs upgrade` | 默认清洁升级：先拆卸清理，再拉取并重新部署 |
-| 安装/升级 OpenCode | `node scripts/deploy.mjs opencode-install` | 执行 `npm i -g opencode-ai` |
-| 检查 OpenCode 环境 | `node scripts/deploy.mjs opencode-check` | 检查 opencode 命令与端口监听 |
-| 启动 OpenCode CLI | `node scripts/deploy.mjs opencode-start` | 自动写入 `opencode.json` 后前台执行 `opencode` |
-| 首次引导 | `node scripts/deploy.mjs guide` | 安装/部署/引导启动的一体化流程 |
-| 管理菜单 | `npm run manage:bridge` | 交互式菜单（默认入口） |
-| 启动后台 | `npm run start` | 后台启动（自动检测/补构建） |
-| 停止后台 | `node scripts/stop.mjs` | 按 PID 停止后台进程 |
-
-详细部署说明见 [部署与运维文档](assets/docs/deployment.md)。
-
-<a id="环境变量"></a>
-## ⚙️ 环境变量
-
-核心配置：
-
-| 变量 | 必填 | 默认值 | 说明 |
-|---|---|---|---|
-| `FEISHU_APP_ID` | 是 | - | 飞书应用 App ID |
-| `FEISHU_APP_SECRET` | 是 | - | 飞书应用 App Secret |
-| `OPENCODE_HOST` | 否 | `localhost` | OpenCode 地址 |
-| `OPENCODE_PORT` | 否 | `4096` | OpenCode 端口 |
-| `DISCORD_ENABLED` | 否 | `false` | 是否启用 Discord 适配器 |
-| `DISCORD_TOKEN` | 否 | - | Discord Bot Token |
-
-完整配置详见 [环境变量配置文档](assets/docs/environment.md)。
-
-<a id="可靠性能力"></a>
-## 🛡️ 可靠性能力（心跳 + Cron + 宕机救援）
-
-详见 [可靠性指南](assets/docs/reliability.md)。
-
-### 快速概览
-
-- **内置 Cron 任务**：`watchdog-probe`（30 秒）、`process-consistency-check`（60 秒）、`budget-reset`（每天 0 点）
-- **三种管理入口**：HTTP API（`/cron/*`）、Feishu（`/cron ...`）、Discord（`///cron ...`）
-- **主动心跳**：可配置定时器向 Agent Session 发送检查提示
-- **自动救援**：连续失败达到阈值后自动修复本地 OpenCode（仅 loopback）
-
-### 最小配置
-
-```dotenv
-RELIABILITY_CRON_ENABLED=true
-RELIABILITY_CRON_API_ENABLED=true
-RELIABILITY_PROACTIVE_HEARTBEAT_ENABLED=false
-RELIABILITY_LOOPBACK_ONLY=true
-```
-
-<a id="飞书后台配置"></a>
-## ⚙️ 飞书后台配置
-
-详见 [飞书后台配置文档](assets/docs/feishu-config.md)。
-
-### 事件订阅
-
-| 事件 | 必需 | 用途 |
-|---|---|---|
-| `im.message.receive_v1` | 是 | 接收群聊/私聊消息 |
-| `im.message.recalled_v1` | 是 | 用户撤回触发 `/undo` 回滚 |
-| `im.chat.member.user.deleted_v1` | 是 | 成员退群后触发生命周期清理 |
-| `im.chat.disbanded_v1` | 是 | 群解散后清理本地会话映射 |
-| `card.action.trigger` | 是 | 处理控制面板、权限确认、提问卡片回调 |
-
-### 应用权限
-
-批量导入权限配置（保存至 `acc.json` 后在开发者后台导入）：
-
-```json
-{
-  "scopes": {
-    "tenant": [
-      "im:message.p2p_msg:readonly",
-      "im:chat",
-      "im:chat.members:read",
-      "im:chat.members:write_only",
-      "im:message",
-      "im:message.group_at_msg:readonly",
-      "im:message.group_msg",
-      "im:message.reactions:read",
-      "im:message.reactions:write_only",
-      "im:resource"
-    ],
-    "user": []
-  }
-}
-```
-
-<a id="命令速查"></a>
-## 📖 命令速查
-
-详见 [命令速查文档](assets/docs/commands.md)。
+## 📝 命令速查
 
 ### 飞书命令
 
 | 命令 | 说明 |
-|---|---|
+|------|------|
+| `/help` | 查看帮助 |
+| `/panel` | 打开控制面板（模型、角色、强度） |
+| `/model <provider:model>` | 切换模型 |
+| `/agent <name>` | 切换 Agent |
+| `/effort <档位>` | 设置推理强度 |
+| `/session new` | 开启新话题 |
+| `/session <sessionId>` | 绑定已有会话 |
+| `/undo` | 撤回上一轮交互 |
+| `/compact` | 压缩上下文 |
+| `/project list` | 列出可用项目 |
+| `/send <路径>` | 发送文件到群聊 |
+| `/cron ...` | 管理 Cron 任务 |
+| `!<shell 命令>` | 透传 Shell 命令 |
+
+### Discord 命令
+
+| 命令 | 说明 |
+|------|------|
+| `///session` | 查看绑定的会话 |
+| `///new` | 新建并绑定会话 |
+| `///bind <sessionId>` | 绑定已有会话 |
+| `///undo` | 撤回上一轮 |
+| `///compact` | 压缩上下文 |
+| `///workdir` | 设置工作目录 |
+| `///cron ...` | 管理 Cron 任务 |
+
+### 企业微信命令
+
+| 命令 | 说明 |
+|------|------|
 | `/help` | 查看帮助 |
 | `/panel` | 打开控制面板 |
 | `/model <provider:model>` | 切换模型 |
@@ -334,85 +156,136 @@ RELIABILITY_LOOPBACK_ONLY=true
 | `/session new` | 开启新话题 |
 | `/undo` | 撤回上一轮交互 |
 | `/compact` | 压缩上下文 |
-| `!<shell 命令>` | 透传 shell 命令 |
 
-### Discord 命令
+---
 
-| 命令 | 说明 |
-|---|---|
-| `///session` | 查看绑定的会话 |
-| `///new` | 新建并绑定会话 |
-| `///bind <sessionId>` | 绑定已有会话 |
-| `///undo` | 回撤上一轮 |
-| `///compact` | 压缩上下文 |
+## 🏗️ 架构概览
 
-<a id="agent使用"></a>
-## 🤖 Agent（角色）使用
-
-详见 [Agent 使用文档](assets/docs/agent.md)。
-
-### 快速开始
-
-- 查看当前 Agent：`/agent`
-- 切换 Agent：`/agent <name>`
-- 回到默认：`/agent off`
-
-### 自定义 Agent
-
-```text
-创建角色 名称=旅行助手; 描述=擅长制定旅行计划; 类型=主; 工具=webfetch
+```
+┌─────────────────────────────────────────────────────────────┐
+│                      平台适配层                              │
+│  飞书 │ Discord │ 企业微信 │ Telegram │ QQ │ WhatsApp │ 微信  │
+└────┬────────┬────────┬────────┬────────┬────────┬──────────┘
+     │        │        │        │        │        │
+     └────────┴────────┴────────┴────────┴────────┘
+                        │
+              ┌─────────▼─────────┐
+              │     路由层        │
+              │   RootRouter      │
+              └─────────┬─────────┘
+                        │
+     ┌──────────────────┼──────────────────┐
+     │                  │                  │
+┌────▼────┐      ┌─────▼─────┐      ┌─────▼─────┐
+│权限处理 │      │ 问题处理  │      │ 输出缓冲  │
+│Permission│     │ Question  │      │ Output    │
+└────┬────┘      └─────┬─────┘      └─────┬─────┘
+     │                 │                  │
+     └─────────────────┼──────────────────┘
+                       │
+             ┌─────────▼─────────┐
+             │   OpenCode 集成   │
+             │  OpencodeClient   │
+             └─────────┬─────────┘
+                       │
+             ┌─────────▼─────────┐
+             │   OpenCode CLI    │
+             └───────────────────┘
 ```
 
-<a id="关键实现细节"></a>
-## 📌 关键实现细节
+---
 
-详见 [实现细节文档](assets/docs/implementation.md)。
+## 📚 文档导航
 
-- 权限请求回传：`response` 为 `once | always | reject`
-- question 工具交互：答案通过用户文字回复解析
-- 流式与思考卡片：文本与思考分流写入输出缓冲
-- `/undo` 一致性：同时删除飞书侧消息并对 OpenCode 执行 `revert`
-
-<a id="故障排查"></a>
-## 🛠️ 故障排查
-
-详见 [故障排查文档](assets/docs/troubleshooting.md)。
-
-| 现象 | 优先检查 |
-|---|---|
-| 飞书发送消息后 OpenCode 无反应 | 检查飞书权限配置 |
-| 点权限卡片后 OpenCode 无反应 | 确认回传值是 `once/always/reject` |
-| `/compact` 失败 | 检查 OpenCode 可用模型 |
-| 后台模式无法停止 | `logs/bridge.pid` 是否残留 |
-
-<a id="详细文档"></a>
-## 📚 详细文档
+### 核心文档
 
 | 文档 | 说明 |
-|---|---|
-| [架构文档](assets/docs/architecture.md) | 项目分层设计与平台能力矩阵 |
-| [环境变量](assets/docs/environment.md) | 完整环境变量配置说明 |
-| [可靠性指南](assets/docs/reliability.md) | 心跳、Cron 与宕机救援配置 |
-| [飞书后台配置](assets/docs/feishu-config.md) | 事件订阅与权限配置 |
-| [命令速查](assets/docs/commands.md) | 完整命令列表与使用说明 |
-| [实现细节](assets/docs/implementation.md) | 关键功能实现说明 |
-| [故障排查](assets/docs/troubleshooting.md) | 常见问题与解决方案 |
+|------|------|
+| [架构设计](assets/docs/architecture.md) | 项目分层设计与核心模块职责 |
+| [配置中心](assets/docs/environment.md) | 完整配置参数说明 |
 | [部署运维](assets/docs/deployment.md) | 部署、升级与 systemd 配置 |
+| [命令速查](assets/docs/commands.md) | 完整命令列表与使用说明 |
+| [可靠性指南](assets/docs/reliability.md) | 心跳、Cron 与宕机救援配置 |
+| [故障排查](assets/docs/troubleshooting.md) | 常见问题与解决方案 |
+
+### 平台配置文档
+
+| 文档 | 说明 |
+|------|------|
+| [飞书配置](assets/docs/feishu-config.md) | 飞书事件订阅与权限配置 |
+| [Discord 配置](assets/docs/discord-config.md) | Discord 机器人配置指南 |
+| [企业微信配置](assets/docs/wecom-config.md) | 企业微信机器人配置指南 |
+| [Telegram 配置](assets/docs/telegram-config.md) | Telegram Bot 配置指南 |
+| [QQ 配置](assets/docs/qq-config.md) | QQ 官方/OneBot 协议配置指南 |
+| [WhatsApp 配置](assets/docs/whatsapp-config.md) | WhatsApp Personal/Business 配置指南 |
+| [微信个人号配置](assets/docs/weixin-config.md) | 微信个人号配置指南 |
+
+### 扩展文档
+
+| 文档 | 说明 |
+|------|------|
 | [Agent 使用](assets/docs/agent.md) | 角色配置与自定义 Agent |
-| [灰度部署](assets/docs/rollout.md) | 路由器模式灰度与回滚 SOP |
+| [实现细节](assets/docs/implementation.md) | 关键功能实现说明 |
 | [SDK API](assets/docs/sdk-api.md) | OpenCode SDK 集成指南 |
 | [工作目录指南](assets/docs/workspace-guide.md) | 工作目录策略与项目配置 |
+| [灰度部署](assets/docs/rollout.md) | 路由器模式灰度与回滚 |
 
-<a id="许可证"></a>
-## 📝 许可证
+---
+
+## 📋 环境要求
+
+- **Node.js**: >= 18.0.0
+- **操作系统**: Linux / macOS / Windows
+- **OpenCode**: 需要安装并运行
+
+---
+
+## 🔧 配置说明
+
+### 配置管理方式
+
+| 方式 | 说明 |
+|------|------|
+| Web 面板（推荐） | 访问 `http://localhost:4098` 可视化配置 |
+| SQLite 数据库 | 配置存储在 `data/config.db` |
+| .env 文件 | 仅存储 Admin 面板启动参数 |
+
+### 核心配置项
+
+| 配置项 | 默认值 | 说明 |
+|--------|--------|------|
+| `FEISHU_ENABLED` | `false` | 是否启用飞书适配器 |
+| `DISCORD_ENABLED` | `false` | 是否启用 Discord 适配器 |
+| `OPENCODE_HOST` | `localhost` | OpenCode 地址 |
+| `OPENCODE_PORT` | `4096` | OpenCode 端口 |
+| `ADMIN_PORT` | `4098` | Web 配置面板监听端口 |
+
+完整配置参数请参考 [配置中心文档](assets/docs/environment.md)。
+
+---
+
+## 📄 许可证
 
 本项目采用 [GNU General Public License v3.0](LICENSE)
 
 **GPL v3 意味着：**
 - ✅ 可自由使用、修改和分发
 - ✅ 可用于商业目的
-- 📝 必须开源修改版本
-- 📝 必须保留原作者版权
-- 📝 衍生作品必须使用 GPL v3 协议
+- ✅ 必须开源修改版本
+- ✅ 必须保留原作者版权
+- ✅ 衍生作品必须使用 GPL v3 协议
 
-如果这个项目对你有帮助，请给个 ⭐️ Star！
+---
+
+## 🌟 贡献与反馈
+
+如果这个项目对你有帮助，请给个 Star！
+
+遇到问题或有改进建议，欢迎提交 [Issue](https://github.com/HNGM-HP/opencode-bridge/issues) 或 [Pull Request](https://github.com/HNGM-HP/opencode-bridge/pulls)。
+
+---
+
+## 📞 技术支持
+
+- **GitHub Issues**: [问题反馈](https://github.com/HNGM-HP/opencode-bridge/issues)
+- **项目主页**: [GitHub Repository](https://github.com/HNGM-HP/opencode-bridge)

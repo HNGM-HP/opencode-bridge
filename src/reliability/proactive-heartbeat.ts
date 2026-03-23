@@ -180,7 +180,7 @@ function readSessionState(filePath: string): HeartbeatSessionState | null {
       updatedAtMs: typeof parsed.updatedAtMs === 'number' ? parsed.updatedAtMs : 0,
     };
   } catch (error) {
-    console.error('[proactive-heartbeat] readSessionState failed:', error instanceof Error ? error.message : String(error));
+    console.error('[ProactiveHeartbeat] readSessionState failed:', error instanceof Error ? error.message : String(error));
     return null;
   }
 }

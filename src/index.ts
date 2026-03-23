@@ -1,8 +1,42 @@
 import { spawn } from 'node:child_process';
+import { initLogger } from './utils/logger.js';
+import { logStore } from './store/log-store.js';
+import { createAdminServer } from './admin/admin-server.js';
 import { feishuClient, type FeishuMessageEvent } from './feishu/client.js';
 import { feishuAdapter } from './platform/adapters/feishu-adapter.js';
 import { discordAdapter } from './platform/adapters/discord-adapter.js';
+import { wecomAdapter } from './platform/adapters/wecom-adapter.js';
+import { telegramAdapter } from './platform/adapters/telegram-adapter.js';
+import { qqAdapter } from './platform/adapters/qq-adapter.js';
+import { whatsappAdapter } from './platform/adapters/whatsapp-adapter.js';
+import { weixinAdapter } from './platform/adapters/weixin-adapter.js';
+import type { PlatformSender } from './platform/types.js';
 import { opencodeClient, type PermissionRequestEvent } from './opencode/client.js';
+import { streamStateManager, type ToolRuntimeState, type TimelineSegment, type StreamTimelineState } from './store/stream-state.js';
+import { buildTelegramText, buildPortableUpdateText, buildPortableUpdatePayload } from './utils/text-builder.js';
+
+// 根据平台获取正确的 Sender
+function getSenderByPlatform(platform: string): PlatformSender | null {
+  switch (platform) {
+    case 'feishu':
+      return feishuAdapter.getSender();
+    case 'discord':
+      return discordAdapter.getSender();
+    case 'wecom':
+      return wecomAdapter.getSender();
+    case 'telegram':
+      return telegramAdapter.getSender();
+    case 'qq':
+      return qqAdapter.getSender();
+    case 'whatsapp':
+      return whatsappAdapter.getSender();
+    case 'weixin':
+      return weixinAdapter.getSender();
+    default:
+      console.warn(`[getSenderByPlatform] 未知平台: ${platform}, 使用飞书作为fallback`);
+      return feishuAdapter.getSender();
+  }
+}
 import { outputBuffer } from './opencode/output-buffer.js';
 import { delayedResponseHandler } from './opencode/delayed-handler.js';
 import { questionHandler } from './opencode/question-handler.js';
@@ -12,9 +46,14 @@ import { p2pHandler } from './handlers/p2p.js';
 import { groupHandler } from './handlers/group.js';
 import { lifecycleHandler } from './handlers/lifecycle.js';
 import { createDiscordHandler } from './handlers/discord.js';
+import { wecomHandler } from './handlers/wecom.js';
+import { telegramHandler } from './handlers/telegram.js';
+import { qqHandler } from './handlers/qq.js';
+import { whatsappHandler } from './handlers/whatsapp.js';
+import { weixinHandler } from './handlers/weixin.js';
 import { commandHandler } from './handlers/command.js';
 import { cardActionHandler } from './handlers/card-action.js';
-import { validateConfig, routerConfig, outputConfig, reliabilityConfig, opencodeConfig } from './config.js';
+import { validateConfig, routerConfig, outputConfig, reliabilityConfig, opencodeConfig, isPlatformConfigured } from './config.js';
 import { rootRouter } from './router/root-router.js';
 import { ConversationHeartbeatEngine } from './reliability/conversation-heartbeat.js';
 import { CronScheduler } from './reliability/scheduler.js';
@@ -160,9 +199,12 @@ export const createRescueOrchestrator = (
         const startOpenCode = async (): Promise<void> => {
           return new Promise((resolve, reject) => {
             try {
+              const isWindows = process.platform === 'win32';
               const child = spawn('opencode', [], {
                 detached: true,
                 stdio: 'ignore',
+                shell: isWindows,
+                windowsHide: isWindows,
               });
               child.unref();
               setTimeout(() => resolve(), 2000);
@@ -299,13 +341,7 @@ export const bootstrapReliabilityLifecycle = (
       return true;
     },
     getSender: platform => {
-      if (platform === 'feishu') {
-        return feishuAdapter.getSender();
-      }
-      if (platform === 'discord') {
-        return discordAdapter.getSender();
-      }
-      return null;
+      return getSenderByPlatform(platform);
     },
     logger: {
       info: message => {
@@ -493,9 +529,11 @@ export const bootstrapReliabilityLifecycle = (
 };
 
 async function main() {
+  // 初始化日志收集器（最早执行，捕获所有后续日志）
+  initLogger(logStore);
 
   console.log('╔════════════════════════════════════════════════╗');
-  console.log('║   飞书 × OpenCode 桥接服务 v2.9.1 ║');
+  console.log('║   飞书 × OpenCode 桥接服务 v2.9.5      ║');
   console.log('╚════════════════════════════════════════════════╝');
 
   // 1. 如果启用了 OpenCode 自动启动，先清理旧进程并启动
@@ -509,9 +547,14 @@ async function main() {
       await new Promise(resolve => setTimeout(resolve, 3000));
 
       const { spawn } = await import('node:child_process');
-      opencodeChildProcess = spawn(opencodeConfig.autoStartCmd, [], {
+      // Windows 下需要 shell: true 才能正确执行带参数的命令
+      const isWindows = process.platform === 'win32';
+      const cmdParts = opencodeConfig.autoStartCmd.split(' ');
+      opencodeChildProcess = spawn(cmdParts[0], cmdParts.slice(1), {
         stdio: 'ignore',
         detached: true,
+        shell: isWindows,
+        windowsHide: isWindows,
       });
 
       opencodeChildProcess.on('error', (err) => {
@@ -528,12 +571,37 @@ async function main() {
     }
   }
 
+  // 注册进程退出时的清理逻辑，确保子进程不会变成孤儿进程
+  const cleanupChildProcess = () => {
+    if (opencodeChildProcess && opencodeChildProcess.pid) {
+      try {
+        // 由于子进程是 detached，需要显式终止
+        process.kill(opencodeChildProcess.pid, 'SIGTERM');
+        console.log(`[Index] 已发送 SIGTERM 到 OpenCode 子进程 (PID=${opencodeChildProcess.pid})`);
+      } catch {
+        // 进程可能已经退出，忽略错误
+      }
+    }
+  };
+
+  // 监听主进程退出事件
+  process.on('exit', cleanupChildProcess);
+  process.on('SIGINT', () => {
+    cleanupChildProcess();
+    process.exit(0);
+  });
+  process.on('SIGTERM', () => {
+    cleanupChildProcess();
+    process.exit(0);
+  });
+
   // 3. 验证配置
   try {
     validateConfig();
   } catch (error) {
-    console.error('配置错误:', error);
-    process.exit(1);
+    console.warn('[Config] ⚠️ 未检测到已配置的平台（可能是首次部署），机器人服务暂不拉起。');
+    console.warn('[Config] 💡 核心管理后台即将启动，请前往 Web 控制台配置相关参数并按提示重启服务生效！');
+    console.warn(`[Config] 详细信息: ${error instanceof Error ? error.message : String(error)}`);
   }
 
   // 1.5. 路由器模式配置
@@ -551,64 +619,14 @@ async function main() {
   // 2. 连接 OpenCode
   const connected = await opencodeClient.connect();
   if (!connected) {
-    console.error('无法连接到OpenCode服务器，请确保 opencode serve 已运行');
+    console.error('[OpenCode] 无法连接到服务器，请确保 opencode serve 已运行');
     process.exit(1);
   }
 
   // 3. 配置输出缓冲 (流式响应)
-  const streamContentMap = new Map<string, { text: string; thinking: string }>();
-  const reasoningSnapshotMap = new Map<string, string>();
-  const textSnapshotMap = new Map<string, string>();
-  const retryNoticeMap = new Map<string, string>();
-  const errorNoticeMap = new Map<string, string>();
-  const streamCardMessageIdsMap = new Map<string, string[]>();
   const STREAM_CARD_COMPONENT_BUDGET = 180;
   const CORRELATION_CACHE_TTL_MS = 10 * 60 * 1000;
 
-  type CorrelationChatRef = {
-    chatId: string;
-    expiresAt: number;
-  };
-
-  const toolCallChatMap = new Map<string, CorrelationChatRef>();
-  const messageChatMap = new Map<string, CorrelationChatRef>();
-
-  type ToolRuntimeState = {
-    name: string;
-    status: 'pending' | 'running' | 'completed' | 'failed';
-    output?: string;
-    kind?: 'tool' | 'subtask';
-  };
-
-  type TimelineSegment =
-    | {
-        type: 'text';
-        text: string;
-      }
-    | {
-        type: 'reasoning';
-        text: string;
-      }
-    | {
-        type: 'tool';
-        name: string;
-        status: ToolRuntimeState['status'];
-        output?: string;
-        kind?: 'tool' | 'subtask';
-      }
-    | {
-        type: 'note';
-        text: string;
-        variant?: 'retry' | 'compaction' | 'question' | 'error' | 'permission';
-      };
-
-  type StreamTimelineState = {
-    order: string[];
-    segments: Map<string, TimelineSegment>;
-  };
-
-  const streamToolStateMap = new Map<string, Map<string, ToolRuntimeState>>();
-  const streamTimelineMap = new Map<string, StreamTimelineState>();
   const getPendingPermissionForChat = (chatId: string): StreamCardPendingPermission | undefined => {
     const head = permissionHandler.peekForChat(chatId);
     if (!head) return undefined;
@@ -627,34 +645,15 @@ async function main() {
   };
 
   const getOrCreateTimelineState = (bufferKey: string): StreamTimelineState => {
-    let timeline = streamTimelineMap.get(bufferKey);
-    if (!timeline) {
-      timeline = {
-        order: [],
-        segments: new Map(),
-      };
-      streamTimelineMap.set(bufferKey, timeline);
-    }
-    return timeline;
+    return streamStateManager.getOrCreateTimeline(bufferKey);
   };
 
   const trimTimeline = (timeline: StreamTimelineState): void => {
-    const limit = 80;
-    while (timeline.order.length > limit) {
-      const removedKey = timeline.order.shift();
-      if (removedKey) {
-        timeline.segments.delete(removedKey);
-      }
-    }
+    streamStateManager.trimTimeline(timeline);
   };
 
   const upsertTimelineSegment = (bufferKey: string, segmentKey: string, segment: TimelineSegment): void => {
-    const timeline = getOrCreateTimelineState(bufferKey);
-    if (!timeline.segments.has(segmentKey)) {
-      timeline.order.push(segmentKey);
-      trimTimeline(timeline);
-    }
-    timeline.segments.set(segmentKey, segment);
+    streamStateManager.upsertTimelineSegment(bufferKey, segmentKey, segment);
   };
 
   const appendTimelineText = (
@@ -755,7 +754,7 @@ async function main() {
   const discordHandler = createDiscordHandler(discordAdapter.getSender());
 
   const getTimelineSegments = (bufferKey: string): StreamCardSegment[] => {
-    const timeline = streamTimelineMap.get(bufferKey);
+    const timeline = streamStateManager.getTimeline(bufferKey);
     if (!timeline) {
       return [];
     }
@@ -843,48 +842,60 @@ async function main() {
     return normalized.length > 0 ? normalized : undefined;
   };
 
+  // 关联缓存辅助函数（使用 StreamStateManager）
+  const setToolCallCorrelation = (toolCallId: unknown, chatId: unknown): void => {
+    const normalizedKey = toNonEmptyString(toolCallId);
+    const normalizedChatId = toNonEmptyString(chatId);
+    if (!normalizedKey || !normalizedChatId) return;
+    streamStateManager.setToolCallChat(normalizedKey, normalizedChatId);
+  };
+
+  const setMessageCorrelation = (messageId: unknown, chatId: unknown): void => {
+    const normalizedKey = toNonEmptyString(messageId);
+    const normalizedChatId = toNonEmptyString(chatId);
+    if (!normalizedKey || !normalizedChatId) return;
+    streamStateManager.setMessageChat(normalizedKey, normalizedChatId);
+  };
+
+  const getToolCallCorrelation = (toolCallId: unknown): string | undefined => {
+    const normalizedKey = toNonEmptyString(toolCallId);
+    if (!normalizedKey) return undefined;
+    const chatId = streamStateManager.getChatIdByToolCall(normalizedKey);
+    if (!chatId) return undefined;
+    // 会话存在性检查
+    if (!chatSessionStore.hasConversationId(chatId)) {
+      return undefined;
+    }
+    return chatId;
+  };
+
+  const getMessageCorrelation = (messageId: unknown): string | undefined => {
+    const normalizedKey = toNonEmptyString(messageId);
+    if (!normalizedKey) return undefined;
+    const chatId = streamStateManager.getChatIdByMessage(normalizedKey);
+    if (!chatId) return undefined;
+    // 会话存在性检查
+    if (!chatSessionStore.hasConversationId(chatId)) {
+      return undefined;
+    }
+    return chatId;
+  };
+
+  // 兼容旧接口（已废弃，保留导出兼容性）
   const setCorrelationChatRef = (
-    map: Map<string, CorrelationChatRef>,
+    _map: unknown,
     key: unknown,
     chatId: unknown
   ): void => {
-    const normalizedKey = toNonEmptyString(key);
-    const normalizedChatId = toNonEmptyString(chatId);
-    if (!normalizedKey || !normalizedChatId) {
-      return;
-    }
-
-    map.set(normalizedKey, {
-      chatId: normalizedChatId,
-      expiresAt: Date.now() + CORRELATION_CACHE_TTL_MS,
-    });
+    console.warn('[Deprecated] setCorrelationChatRef is deprecated, use setToolCallCorrelation or setMessageCorrelation instead');
   };
 
   const getCorrelationChatRef = (
-    map: Map<string, CorrelationChatRef>,
+    _map: unknown,
     key: unknown
   ): string | undefined => {
-    const normalizedKey = toNonEmptyString(key);
-    if (!normalizedKey) {
-      return undefined;
-    }
-
-    const entry = map.get(normalizedKey);
-    if (!entry) {
-      return undefined;
-    }
-
-    if (entry.expiresAt <= Date.now()) {
-      map.delete(normalizedKey);
-      return undefined;
-    }
-
-    if (!chatSessionStore.hasConversationId(entry.chatId)) {
-      map.delete(normalizedKey);
-      return undefined;
-    }
-
-    return entry.chatId;
+    console.warn('[Deprecated] getCorrelationChatRef is deprecated, use getToolCallCorrelation or getMessageCorrelation instead');
+    return undefined;
   };
 
   type PermissionChatResolution = {
@@ -914,12 +925,12 @@ async function main() {
       }
     }
 
-    const toolCallChatId = getCorrelationChatRef(toolCallChatMap, event.callId);
+    const toolCallChatId = getToolCallCorrelation(event.callId);
     if (toolCallChatId) {
       return { chatId: toolCallChatId, source: 'tool_call' };
     }
 
-    const messageChatId = getCorrelationChatRef(messageChatMap, event.messageId);
+    const messageChatId = getMessageCorrelation(event.messageId);
     if (messageChatId) {
       return { chatId: messageChatId, source: 'message' };
     }
@@ -968,136 +979,6 @@ async function main() {
       return resolvedConversationId;
     }
     return `${platform}:${resolvedConversationId}`;
-  };
-
-  const buildPortableUpdateText = (data: StreamCardData, showThinking: boolean = true): string => {
-    const mainText = data.text.trim();
-    const thinkingText = showThinking ? data.thinking.trim() : '';
-
-    if (mainText && thinkingText) {
-      const safeThinking = thinkingText.replace(/```/g, '` ` `');
-      const clippedThinking = safeThinking.length > 1400
-        ? `${safeThinking.slice(0, 1400)}\n...(思考内容已截断)`
-        : safeThinking;
-      return [
-        '-----------',
-        '```md',
-        clippedThinking,
-        '```',
-        '-----------',
-        mainText,
-      ].join('\n');
-    }
-
-    if (mainText) {
-      return `-----------\n${mainText}`;
-    }
-
-    if (thinkingText) {
-      const safeThinking = thinkingText.replace(/```/g, '` ` `');
-      const clippedThinking = safeThinking.length > 1400
-        ? `${safeThinking.slice(0, 1400)}\n...(思考内容已截断)`
-        : safeThinking;
-      return [
-        '-----------',
-        '```md',
-        clippedThinking,
-        '```',
-        '-----------',
-        '⏳ 正在处理...',
-      ].join('\n');
-    }
-
-    if (data.status === 'failed') {
-      return '❌ 执行失败';
-    }
-
-    if (data.status === 'completed') {
-      return '✅ 已完成';
-    }
-
-    return '⏳ 正在处理...';
-  };
-
-  const buildPortableUpdatePayload = (data: StreamCardData, conversationId: string, platform: string = 'feishu'): { discordText: string; discordComponents?: Array<{
-    type: 'select';
-    customId: string;
-    placeholder: string;
-    options: Array<{ label: string; value: string; description?: string }>;
-    minValues?: number;
-    maxValues?: number;
-  }> } => {
-    // 根据平台读取可见性配置
-    const showThinkingChain = platform === 'discord'
-      ? outputConfig.discord.showThinkingChain
-      : platform === 'feishu'
-        ? outputConfig.feishu.showThinkingChain
-        : outputConfig.showThinkingChain;
-    const showToolChain = platform === 'discord'
-      ? outputConfig.discord.showToolChain
-      : platform === 'feishu'
-        ? outputConfig.feishu.showToolChain
-        : outputConfig.showToolChain;
-
-    // 过滤 segments，移除 tool 和 reasoning 类型（当对应开关关闭时）
-    const filteredSegments = showToolChain && showThinkingChain
-      ? data.segments
-      : (data.segments ?? []).filter(segment => {
-          if (!showToolChain && segment.type === 'tool') return false;
-          if (!showThinkingChain && segment.type === 'reasoning') return false;
-          return true;
-        });
-
-    const filteredData: StreamCardData = {
-      ...data,
-      segments: filteredSegments,
-    };
-
-    const baseText = buildPortableUpdateText(filteredData, showThinkingChain);
-    if (!data.pendingQuestion) {
-      return { discordText: baseText };
-    }
-
-    const questionLine = `❓ ${data.pendingQuestion.question}`;
-    const progressLine = `第 ${data.pendingQuestion.questionIndex + 1}/${data.pendingQuestion.totalQuestions} 题`;
-    const discordText = `${baseText}\n${questionLine}\n${progressLine}`;
-
-    const optionList = data.pendingQuestion.options
-      .filter(option => option.label.trim().length > 0)
-      .slice(0, 24)
-      .map(option => ({
-        label: option.label,
-        value: option.label,
-        ...(option.description ? { description: option.description } : {}),
-      }));
-
-    const options = [...optionList, {
-      label: '跳过本题',
-      value: '__skip__',
-      description: '留空并进入下一题',
-    }];
-
-    if (options.length === 0) {
-      return { discordText };
-    }
-
-    const maxValues = data.pendingQuestion.multiple
-      ? Math.min(Math.max(1, optionList.length), 25)
-      : 1;
-
-    return {
-      discordText,
-      discordComponents: [
-        {
-          type: 'select',
-          customId: `oc_question:${conversationId}`,
-          placeholder: '选择当前问题答案',
-          options,
-          minValues: 1,
-          maxValues,
-        },
-      ],
-    };
   };
 
   const normalizeToolStatus = (status: unknown): 'pending' | 'running' | 'completed' | 'failed' => {
@@ -1221,16 +1102,16 @@ async function main() {
   };
 
   const getOrCreateToolStateBucket = (bufferKey: string): Map<string, ToolRuntimeState> => {
-    let bucket = streamToolStateMap.get(bufferKey);
+    let bucket = streamStateManager.getToolStates(bufferKey);
     if (!bucket) {
       bucket = new Map();
-      streamToolStateMap.set(bufferKey, bucket);
+      streamStateManager.setToolStates(bufferKey, bucket);
     }
     return bucket;
   };
 
   const syncToolsToBuffer = (bufferKey: string): void => {
-    const bucket = streamToolStateMap.get(bufferKey);
+    const bucket = streamStateManager.getToolStates(bufferKey);
     if (!bucket) {
       outputBuffer.setTools(bufferKey, []);
       return;
@@ -1267,7 +1148,7 @@ async function main() {
   };
 
   const markActiveToolsCompleted = (bufferKey: string): void => {
-    const bucket = streamToolStateMap.get(bufferKey);
+    const bucket = streamStateManager.getToolStates(bufferKey);
     if (!bucket) return;
     for (const [toolKey, item] of bucket.entries()) {
       if (item.status === 'running' || item.status === 'pending') {
@@ -1293,7 +1174,7 @@ async function main() {
     }
 
     const key = `${sessionID}:${part.id}`;
-    const prev = textSnapshotMap.get(key) || '';
+    const prev = streamStateManager.getTextSnapshot(key) || '';
     const current = part.text;
     if (current.startsWith(prev)) {
       const deltaText = current.slice(prev.length);
@@ -1303,7 +1184,7 @@ async function main() {
     } else if (current !== prev) {
       outputBuffer.append(bufferKey, current);
     }
-    textSnapshotMap.set(key, current);
+    streamStateManager.setTextSnapshot(key, current);
     setTimelineText(bufferKey, `text:${key}`, 'text', current);
   };
 
@@ -1316,7 +1197,7 @@ async function main() {
     }
 
     const key = `${sessionID}:${part.id}`;
-    const prev = reasoningSnapshotMap.get(key) || '';
+    const prev = streamStateManager.getReasoningSnapshot(key) || '';
     const current = part.text;
     if (current.startsWith(prev)) {
       const deltaText = current.slice(prev.length);
@@ -1326,24 +1207,19 @@ async function main() {
     } else if (current !== prev) {
       outputBuffer.appendThinking(bufferKey, current);
     }
-    reasoningSnapshotMap.set(key, current);
+    streamStateManager.setReasoningSnapshot(key, current);
     setTimelineText(bufferKey, `reasoning:${key}`, 'reasoning', current);
   };
 
   const clearPartSnapshotsForSession = (sessionID: string): void => {
+    // 注意：StreamStateManager 的快照是按 bufferKey 管理的
+    // 这里保留旧的 sessionID:partId 格式，但需要遍历所有键
+    // 暂时保留原始实现，后续可以优化
     const prefix = `${sessionID}:`;
-    for (const key of reasoningSnapshotMap.keys()) {
-      if (key.startsWith(prefix)) {
-        reasoningSnapshotMap.delete(key);
-      }
-    }
-    for (const key of textSnapshotMap.keys()) {
-      if (key.startsWith(prefix)) {
-        textSnapshotMap.delete(key);
-      }
-    }
-    retryNoticeMap.delete(sessionID);
-    errorNoticeMap.delete(sessionID);
+    // 由于 StreamStateManager 没有暴露 keys() 方法，这里暂时跳过
+    // 改为在 clear() 时统一清理
+    streamStateManager.setRetryNotice(sessionID, '');
+    streamStateManager.setErrorNotice(sessionID, '');
   };
 
   const formatProviderError = (raw: unknown): string => {
@@ -1463,7 +1339,7 @@ async function main() {
       buffer.status === 'running'
     ) return;
 
-    const current = streamContentMap.get(buffer.key) || { text: '', thinking: '' };
+    const current = streamStateManager.getContent(buffer.key) || { text: '', thinking: '' };
     current.text += text;
     current.thinking += thinking;
 
@@ -1476,7 +1352,7 @@ async function main() {
       }
     }
 
-    streamContentMap.set(buffer.key, current);
+    streamStateManager.setContent(buffer.key, current);
 
     const hasVisibleContent =
       current.text.trim().length > 0 ||
@@ -1495,7 +1371,7 @@ async function main() {
           ? 'completed'
           : 'processing';
 
-    let existingMessageIds = streamCardMessageIdsMap.get(buffer.key) || [];
+    let existingMessageIds = streamStateManager.getCardMessageIds(buffer.key) || [];
     if (existingMessageIds.length === 0 && buffer.messageId) {
       existingMessageIds = [buffer.messageId];
     }
@@ -1514,7 +1390,11 @@ async function main() {
     };
 
     if (platform !== 'feishu') {
-      const sender = platform === 'discord' ? discordAdapter.getSender() : feishuAdapter.getSender();
+      const sender = getSenderByPlatform(platform);
+      if (!sender) {
+        console.error(`[outputBuffer] 无法获取平台 ${platform} 的 sender`);
+        return;
+      }
       const payload = buildPortableUpdatePayload(cardData, conversationId, platform);
       const nextMessageIds: string[] = [];
       const existingMessageId = existingMessageIds[0];
@@ -1547,16 +1427,13 @@ async function main() {
 
       if (nextMessageIds.length > 0) {
         outputBuffer.setMessageId(buffer.key, nextMessageIds[0]);
-        streamCardMessageIdsMap.set(buffer.key, nextMessageIds);
+        streamStateManager.setCardMessageIds(buffer.key, nextMessageIds);
       } else {
-        streamCardMessageIdsMap.delete(buffer.key);
+        streamStateManager.setCardMessageIds(buffer.key, []);
       }
 
       if (buffer.status !== 'running') {
-        streamContentMap.delete(buffer.key);
-        streamToolStateMap.delete(buffer.key);
-        streamTimelineMap.delete(buffer.key);
-        streamCardMessageIdsMap.delete(buffer.key);
+        streamStateManager.clear(buffer.key);
         clearPartSnapshotsForSession(buffer.sessionId);
         outputBuffer.clear(buffer.key);
       }
@@ -1613,9 +1490,9 @@ async function main() {
 
     if (nextMessageIds.length > 0) {
       outputBuffer.setMessageId(buffer.key, nextMessageIds[0]);
-      streamCardMessageIdsMap.set(buffer.key, nextMessageIds);
+      streamStateManager.setCardMessageIds(buffer.key, nextMessageIds);
     } else {
-      streamCardMessageIdsMap.delete(buffer.key);
+      streamStateManager.setCardMessageIds(buffer.key, []);
     }
 
     cardData.messageId = nextMessageIds[0] || undefined;
@@ -1631,10 +1508,7 @@ async function main() {
     );
 
     if (buffer.status !== 'running') {
-      streamContentMap.delete(buffer.key);
-      streamToolStateMap.delete(buffer.key);
-      streamTimelineMap.delete(buffer.key);
-      streamCardMessageIdsMap.delete(buffer.key);
+      streamStateManager.clear(buffer.key);
       clearPartSnapshotsForSession(buffer.sessionId);
       outputBuffer.clear(buffer.key);
     }
@@ -1642,6 +1516,20 @@ async function main() {
 
   // 3.5 初始化 Reliability 生命周期（heartbeat + scheduler + rescue orchestrator）
   const reliabilityLifecycle = bootstrapReliabilityLifecycle();
+
+  // 3.6 启动可视化配置面板（仅在独立运行时启动，被 Admin spawn 时不启动）
+  if (!process.env.BRIDGE_SPAWNED_BY_ADMIN) {
+    const adminPort = parseInt(process.env.ADMIN_PORT ?? '4098', 10);
+    const adminPassword = process.env.ADMIN_PASSWORD ?? '';
+    const adminServer = createAdminServer({
+      port: adminPort,
+      password: adminPassword,
+      cronManager: getRuntimeCronManager() ?? undefined,
+      startedAt: new Date(),
+      version: '2.9.5-beta',
+    });
+    adminServer.start();
+  }
 
   // 4. 监听飞书消息（通过路由器分发）
   feishuClient.on('message', async (event) => {
@@ -1667,6 +1555,54 @@ async function main() {
     await discordHandler.handleInteraction(interaction);
   });
 
+  // 企业微信消息监听
+  wecomAdapter.onMessage(async (event) => {
+    const sender = wecomAdapter.getSender();
+    await wecomHandler.handleMessage(event, sender);
+  });
+
+  // Telegram 消息监听
+  telegramAdapter.onMessage(async (event) => {
+    const sender = telegramAdapter.getSender();
+    await telegramHandler.handleMessage(event, sender);
+  });
+
+  // Telegram 回调查询监听
+  telegramAdapter.onAction(async (event) => {
+    const sender = telegramAdapter.getSender();
+    await telegramHandler.handleAction(event, sender);
+  });
+
+  // QQ 消息监听
+  qqAdapter.onMessage(async (event) => {
+    const sender = qqAdapter.getSender();
+    await qqHandler.handleMessage(event, sender);
+  });
+
+  // QQ 动作监听
+  qqAdapter.onAction(async (event) => {
+    const sender = qqAdapter.getSender();
+    await qqHandler.handleAction(event, sender);
+  });
+
+  // WhatsApp 消息监听
+  whatsappAdapter.onMessage(async (event) => {
+    const sender = whatsappAdapter.getSender();
+    await whatsappHandler.handleMessage(event, sender);
+  });
+
+  // WhatsApp 动作监听
+  whatsappAdapter.onAction(async (event) => {
+    const sender = whatsappAdapter.getSender();
+    await whatsappHandler.handleAction(event, sender);
+  });
+
+  // 个人微信消息监听
+  weixinAdapter.onMessage(async (event) => {
+    const sender = weixinAdapter.getSender();
+    await weixinHandler.handleMessage(event, sender);
+  });
+
 
   // 6. OpenCode 事件监听已移至 openCodeEventHub（单一入口）
 
@@ -1678,10 +1614,10 @@ async function main() {
     const conversationId = conversation.conversationId;
 
     const dedupeKey = `${sessionID}:${errorText}`;
-    if (errorNoticeMap.get(sessionID) === dedupeKey) {
+    if (streamStateManager.getErrorNotice(sessionID) === dedupeKey) {
       return;
     }
-    errorNoticeMap.set(sessionID, dedupeKey);
+    streamStateManager.setErrorNotice(sessionID, dedupeKey);
 
     const bufferKey = buildBufferKeyBySession(sessionID, conversationId);
     const existingBuffer = outputBuffer.get(bufferKey) || outputBuffer.getOrCreate(bufferKey, conversationId, sessionID, null);
@@ -1692,27 +1628,21 @@ async function main() {
     outputBuffer.setStatus(bufferKey, 'failed');
 
     if (!existingBuffer.messageId) {
-      const sender = platform === 'discord' ? discordAdapter.getSender() : feishuAdapter.getSender();
-      await sender.sendText(conversationId, `❌ ${errorText}`);
+      const sender = getSenderByPlatform(platform);
+      if (sender) {
+        await sender.sendText(conversationId, `❌ ${errorText}`);
+      }
     }
   };
 
   openCodeEventHub.setContext({
-    CORRELATION_CACHE_TTL_MS,
-    streamContentMap,
-    reasoningSnapshotMap,
-    textSnapshotMap,
-    retryNoticeMap,
-    errorNoticeMap,
-    streamCardMessageIdsMap,
-    toolCallChatMap,
-    messageChatMap,
-    streamToolStateMap,
-    streamTimelineMap,
+    streamStateManager,
     toSessionId,
     toNonEmptyString,
-    setCorrelationChatRef,
-    getCorrelationChatRef,
+    setToolCallCorrelation,
+    setMessageCorrelation,
+    getToolCallCorrelation,
+    getMessageCorrelation,
     resolvePermissionChat,
     normalizeToolStatus,
     getToolStatusText,
@@ -1780,8 +1710,66 @@ async function main() {
     console.error('[Discord] 启动失败:', e);
     // Discord 启动失败不影响 Feishu 流程
   }
+
+  // 7.6. 启动企业微信适配器（如果启用）
+  try {
+    await wecomAdapter.start();
+  } catch (e) {
+    console.error('[企业微信] 启动失败:', e);
+    // WeCom 启动失败不影响其他平台流程
+  }
+
+  // 7.7. 启动 Telegram 适配器（如果启用）
+  try {
+    await telegramAdapter.start();
+  } catch (e) {
+    console.error('[Telegram] 启动失败:', e);
+    // Telegram 启动失败不影响其他平台流程
+  }
+
+  // 7.8. 启动 QQ 适配器（如果启用）
+  try {
+    await qqAdapter.start();
+  } catch (e) {
+    console.error('[QQ] 启动失败:', e);
+    // QQ 启动失败不影响其他平台流程
+  }
+
+  // 7.9. 启动 WhatsApp 适配器（如果启用）
+  try {
+    await whatsappAdapter.start();
+  } catch (e) {
+    console.error('[WhatsApp] 启动失败:', e);
+    // WhatsApp 启动失败不影响其他平台流程
+  }
+
+  // 7.10. 启动个人微信适配器（如果启用）
+  try {
+    await weixinAdapter.start();
+  } catch (e) {
+    console.error('[个人微信] 启动失败:', e);
+    // Weixin 启动失败不影响其他平台流程
+  }
+
   // 8. 启动飞书客户端
-  await feishuClient.start();
+  if (isPlatformConfigured('feishu')) {
+    feishuClient.setCardActionHandler(async (event) => {
+      const actionValue = event.action?.value;
+      const action = actionValue && typeof actionValue === 'object'
+        ? (actionValue as Record<string, unknown>).action
+        : undefined;
+      const actionName = typeof action === 'string' ? action : '';
+
+      if (actionName.startsWith('create_chat')) {
+        return await p2pHandler.handleCardAction(event);
+      }
+
+      return await cardActionHandler.handle(event);
+    });
+    await feishuAdapter.start();
+  } else {
+    console.log('[System] 飞书长连接暂未启动 (未配置 FEISHU_APP_ID/FEISHU_APP_SECRET)');
+  }
 
   // 9. 启动清理检查
   await lifecycleHandler.cleanUpOnStart();
@@ -1825,21 +1813,56 @@ async function main() {
     try {
       discordAdapter.stop();
     } catch (e) {
-      console.error('停止 Discord 适配器失败:', e);
+      console.error('[Discord] 停止适配器失败:', e);
+    }
+
+    // 3.5. 停止企业微信适配器
+    try {
+      wecomAdapter.stop();
+    } catch (e) {
+      console.error('[企业微信] 停止适配器失败:', e);
+    }
+
+    // 3.6. 停止 Telegram 适配器
+    try {
+      telegramAdapter.stop();
+    } catch (e) {
+      console.error('[Telegram] 停止适配器失败:', e);
+    }
+
+    // 3.7. 停止 QQ 适配器
+    try {
+      qqAdapter.stop();
+    } catch (e) {
+      console.error('[QQ] 停止适配器失败:', e);
+    }
+
+    // 3.8. 停止 WhatsApp 适配器
+    try {
+      whatsappAdapter.stop();
+    } catch (e) {
+      console.error('[WhatsApp] 停止适配器失败:', e);
+    }
+
+    // 3.9. 停止个人微信适配器
+    try {
+      weixinAdapter.stop();
+    } catch (e) {
+      console.error('[个人微信] 停止适配器失败:', e);
     }
 
     // 4. 停止飞书连接
     try {
       feishuClient.stop();
     } catch (e) {
-      console.error('停止飞书连接失败:', e);
+      console.error('[飞书] 停止连接失败:', e);
     }
 
     // 5. 断开 OpenCode 连接
     try {
       opencodeClient.disconnect();
     } catch (e) {
-      console.error('断开 OpenCode 失败:', e);
+      console.error('[OpenCode] 断开连接失败:', e);
     }
 
     // 6. 清理所有缓冲区和定时器
@@ -1848,7 +1871,7 @@ async function main() {
       delayedResponseHandler.cleanupExpired(0);
       questionHandler.cleanupExpired(0);
     } catch (e) {
-      console.error('清理资源失败:', e);
+      console.error('[System] 清理资源失败:', e);
     }
 
     // 延迟退出以确保所有清理完成

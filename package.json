@@ -1,6 +1,6 @@
 {
   "name": "opencode-bridge",
-  "version": "2.9.1",
+  "version": "2.9.5",
   "type": "module",
   "description": "Feishu / Discord × OpenCode bridge service with runtime cron and reliability tooling",
   "main": "dist/index.js",
@@ -25,6 +25,8 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
+    "build:web": "cd web && pnpm install && pnpm run build",
+    "build:all": "npm run build:web && npm run build",
     "test": "vitest run",
     "test:watch": "vitest",
     "start": "node scripts/start.mjs",
@@ -57,12 +59,22 @@
   "dependencies": {
     "@larksuiteoapi/node-sdk": "^1.36.3",
     "@opencode-ai/sdk": "latest",
+    "@wecom/aibot-node-sdk": "^1.0.4",
+    "@whiskeysockets/baileys": "^7.0.0-rc.9",
+    "better-sqlite3": "^12.8.0",
     "discord.js": "^14.25.1",
     "dotenv": "^16.4.5",
-    "node-cron": "^4.2.1"
+    "express": "^5.2.1",
+    "grammy": "^1.41.1",
+    "node-cron": "^4.2.1",
+    "qrcode": "^1.5.4"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/express": "^5.0.6",
     "@types/node": "^22.10.0",
+    "@types/qrcode": "^1.5.6",
+    "puppeteer": "^24.40.0",
     "tsx": "^4.19.0",
     "typescript": "^5.6.0",
     "vitest": "^4.0.18"

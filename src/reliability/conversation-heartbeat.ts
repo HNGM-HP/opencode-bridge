@@ -128,7 +128,7 @@ const atomicWriteState = (stateFilePath: string, state: HeartbeatState): void =>
     fs.writeFileSync(tmpPath, content, 'utf-8');
     fs.renameSync(tmpPath, stateFilePath);
   } catch (error) {
-    console.error('[conversation-heartbeat] tmp cleanup failed:', error instanceof Error ? error.message : String(error));
+    console.error('[ConversationHeartbeat] tmp cleanup failed:', error instanceof Error ? error.message : String(error));
     try {
       if (fs.existsSync(tmpPath)) {
         fs.unlinkSync(tmpPath);

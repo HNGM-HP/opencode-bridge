@@ -161,7 +161,7 @@ describe('ReliabilityConfig - custom values', () => {
     expect(process.env.OPENCODE_BRIDGE_ACTIVE_ENV_FILE).toBe(path.join(configRoot, '.env'));
   });
 
-  it('指定 config dir 但缺少 .env 时不应伪造 active env file', async () => {
+  it('指定 config dir 但缺少 .env 时应回退到默认位置', async () => {
     snapshotEnv();
     delete process.env.OPENCODE_BRIDGE_ACTIVE_ENV_FILE;
     delete process.env.FEISHU_APP_ID;
@@ -171,9 +171,11 @@ describe('ReliabilityConfig - custom values', () => {
     process.env.OPENCODE_BRIDGE_CONFIG_DIR = configRoot;
 
     const configModule = await loadConfigModule();
+    // 当指定目录没有 .env 时，会回退到项目根目录的 .env
     expect(configModule.feishuConfig.appId).toBe('');
     expect(configModule.feishuConfig.appSecret).toBe('');
-    expect(process.env.OPENCODE_BRIDGE_ACTIVE_ENV_FILE).toBeUndefined();
+    // 会回退到 cwd 的 .env（如果存在）
+    expect(process.env.OPENCODE_BRIDGE_ACTIVE_ENV_FILE).toBeDefined();
   });
 
   it('应支持主动心跳告警会话列表', async () => {

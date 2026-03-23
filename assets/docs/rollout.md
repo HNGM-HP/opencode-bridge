@@ -1,6 +1,8 @@
 # 灰度部署与回滚 SOP
 
-> **注意**: 本章节适用于 v2.9.1 版本，涉及路由器模式的灰度升级流程。
+> **注意**: 本章节适用于 v2.9.1+ 版本，涉及路由器模式的灰度升级流程。
+
+---
 
 ## 1. 路由器模式配置
 
@@ -43,19 +45,16 @@ echo "ROUTER_MODE=dual" >> .env
 [Config] 路由器模式：router
 ```
 
+---
+
 ## 2. 灰度验收流程
 
 ### 2.1 三阶段验收
 
-遵严格的三阶段验证流程，确保回滚路径清晰可控：
-
-```mermaid
-flowchart LR
-    A[Legacy 模式] -->|启动验证| B[Dual 模式]
-    B -->|观察 24h| C[Router 模式]
-    C -->|无异常| D[全量上线]
-    C -->|异常| E[立即回滚]
-    B -->|异常| E
+```
+Legacy 模式 → Dual 模式 → Router 模式 → 全量上线
+              ↓              ↓
+           观察 24h        无异常
 ```
 
 **Phase 1: Legacy 验证**
@@ -92,6 +91,8 @@ flowchart LR
 **日志验证:**
 - [ ] 双轨日志字段完整
 - [ ] 无异常错误输出
+
+---
 
 ## 3. 回滚 SOP
 
@@ -133,6 +134,8 @@ grep "路由器模式" logs/service.log
 - [ ] 撤回操作同步
 - [ ] 会话绑定功能正常
 
+---
+
 ## 4. 日志诊断
 
 ### 4.1 双轨日志格式（dual 模式）
@@ -168,6 +171,8 @@ grep "\[Router\]\[dual\]" logs/service.log
 tail -n 100 logs/service.err | grep -i error
 ```
 
+---
+
 ## 5. 环境变量参考
 
 | 变量 | 默认值 | 说明 |
@@ -176,6 +181,8 @@ tail -n 100 logs/service.err | grep -i error
 | `ENABLED_PLATFORMS` | * | 启用的平台列表（逗号分隔） |
 
 **注意**: `ROUTER_MODE` 仅接受 `legacy`、`dual`、`router` 三个值，其他值将回退到 `legacy`。
+
+---
 
 ## 6. 相关文档
 

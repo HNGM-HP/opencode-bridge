@@ -8,7 +8,7 @@ import {
   type CreateChatCardData,
   type CreateChatSessionOption,
 } from '../feishu/cards.js';
-import { DirectoryPolicy, type DirectorySource } from '../utils/directory-policy.js';
+import { DirectoryPolicy } from '../utils/directory-policy.js';
 import { buildSessionTimestamp } from '../utils/session-title.js';
 import { parseCommand, getHelpText, type ParsedCommand } from '../commands/parser.js';
 import { commandHandler } from './command.js';
@@ -297,10 +297,11 @@ private getSessionOptionLabel(session: OpencodeSession, highlightWorkspace: bool
     ];
 
     let totalSessionCount = 0;
-    const knownDirectorySet = new Set<string>(chatSessionStore.getKnownDirectories());
+    let projectOptions: Array<{ name: string; directory: string; source: 'alias' | 'history' }> = [];
+    let sessions: OpencodeSession[] = [];
     if (userConfig.enableManualSessionBind) {
       try {
-        const sessions = this.sortSessionsForCreateChat(await opencodeClient.listSessionsAcrossProjects());
+        sessions = this.sortSessionsForCreateChat(await opencodeClient.listSessionsAcrossProjects());
         totalSessionCount = sessions.length;
 
         let previousDirectory = '';
@@ -311,31 +312,18 @@ private getSessionOptionLabel(session: OpencodeSession, highlightWorkspace: bool
             value: session.id,
           });
           previousDirectory = directory;
-          if (session.directory) {
-            knownDirectorySet.add(session.directory);
-          }
         }
       } catch (error) {
         console.warn('[P2P] 加载 OpenCode 会话列表失败，建群卡片将仅显示新建选项:', error);
       }
     }
 
-    if (directoryConfig.defaultWorkDirectory) {
-      knownDirectorySet.add(directoryConfig.defaultWorkDirectory);
-    }
-    for (const directory of directoryConfig.allowedDirectories) {
-      if (directory) {
-        knownDirectorySet.add(directory);
-      }
-    }
-
-    const availableProjects: Array<{ name: string; directory: string; source: DirectorySource }> =
-      DirectoryPolicy.listAvailableProjects([...knownDirectorySet]);
-    const projectOptions: Array<{ name: string; directory: string; source: 'alias' | 'history' }> =
-      availableProjects.map((project: { name: string; directory: string; source: DirectorySource }) => ({
-        ...project,
-        source: project.source === 'alias' ? 'alias' : 'history',
-      }));
+    const storeKnownDirs = chatSessionStore.getKnownDirectories();
+    const knownDirs = [...new Set([...storeKnownDirs, ...sessions.map(session => session.directory).filter(Boolean)])];
+    projectOptions = DirectoryPolicy.listAvailableProjects(knownDirs).map(project => ({
+      ...project,
+      source: project.source === 'alias' ? 'alias' : 'history',
+    }));
 
     const hasSelected = sessionOptions.some(option => option.value === selectedSessionId);
     return {
@@ -515,29 +503,63 @@ private getSessionOptionLabel(session: OpencodeSession, highlightWorkspace: bool
       console.warn(`[P2P] 用户 ${openId} 在创建群时被标记为无效，尝试手动拉取...`);
     }
 
-    let members = await feishuClient.getChatMembers(chatId);
-    if (members.includes(openId)) {
-      return { ok: true };
-    }
+    // 重试机制：飞书 createChat API 的成员添加可能是异步的，需要等待同步完成
+    const maxRetries = 3;
+    const retryDelayMs = 500;
+    
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      let members = await feishuClient.getChatMembers(chatId);
+      if (members.includes(openId)) {
+        if (attempt > 0) {
+          console.log(`[P2P] 重试 ${attempt + 1}/${maxRetries} 次后确认用户 ${openId} 在群 ${chatId} 中`);
+        }
+        return { ok: true };
+      }
 
-    console.warn(`[P2P] 用户 ${openId} 未在新建群 ${chatId} 中，尝试手动拉取...`);
-    const added = await feishuClient.addChatMembers(chatId, [openId]);
-    if (!added) {
-      return {
-        ok: false,
-        message: '❌ 无法将您添加到群聊。请确保机器人具有"获取群组信息"和"更新群组信息"权限，且您在机器人的可见范围内。',
-      };
-    }
+      // 如果是首次检查，且创建时被标记为无效，直接尝试手动拉取
+      if (attempt === 0 && userInvalidOnCreate) {
+        console.warn(`[P2P] 用户 ${openId} 未在新建群 ${chatId} 中，尝试手动拉取...`);
+        const added = await feishuClient.addChatMembers(chatId, [openId]);
+        if (!added) {
+          return {
+            ok: false,
+            message: '❌ 无法将您添加到群聊。请确保机器人具有"获取群组信息"和"更新群组信息"权限，且您在机器人的可见范围内。',
+          };
+        }
+        // 拉取成功后继续检查
+      }
 
-    members = await feishuClient.getChatMembers(chatId);
-    if (!members.includes(openId)) {
+      // 如果不是最后一次重试，等待后重试
+      if (attempt < maxRetries - 1) {
+        console.warn(`[P2P] 用户 ${openId} 尚未在群 ${chatId} 中，等待 ${retryDelayMs}ms 后重试 (${attempt + 1}/${maxRetries})...`);
+        await new Promise(resolve => setTimeout(resolve, retryDelayMs));
+        continue;
+      }
+
+      // 最后一次重试仍然失败，尝试手动拉取作为兜底
+      console.warn(`[P2P] 重试 ${maxRetries} 次后用户 ${openId} 仍不在群 ${chatId} 中，最后一次尝试手动拉取...`);
+      const added = await feishuClient.addChatMembers(chatId, [openId]);
+      if (!added) {
+        return {
+          ok: false,
+          message: '❌ 无法将您添加到群聊。请确保机器人具有"获取群组信息"和"更新群组信息"权限，且您在机器人的可见范围内。',
+        };
+      }
+
+      // 手动拉取后再次检查
+      members = await feishuClient.getChatMembers(chatId);
+      if (members.includes(openId)) {
+        return { ok: true };
+      }
+
       return {
         ok: false,
         message: '❌ 创建群聊异常：无法确认成员状态，已自动清理无效群。',
       };
     }
 
-    return { ok: true };
+    // 理论上不会到达这里
+    return { ok: false, message: '❌ 未知错误' };
   }
 
   private async findSessionById(sessionId: string): Promise<OpencodeSession | null> {
@@ -614,7 +636,7 @@ private getSessionOptionLabel(session: OpencodeSession, highlightWorkspace: bool
       protectSessionDelete = true;
       targetDirectory = selectedSession.directory;
     } else {
-      let session: Awaited<ReturnType<typeof opencodeClient.createSession>> | null = null;
+      let session;
       try {
         session = await opencodeClient.createSession(sessionTitle, effectiveDir);
       } catch (error) {
@@ -803,7 +825,19 @@ private getSessionOptionLabel(session: OpencodeSession, highlightWorkspace: bool
       this.clearCreateChatProjectSelection(chatId, messageId, openId);
       this.clearCreateChatDirectoryInput(chatId, messageId, openId);
       this.clearCreateChatNameInput(chatId, messageId, openId);
-      await this.createGroupWithSessionSelection(openId, selectedSessionId, chatId, messageId, rawDirectory, customChatName);
+      
+      // 🔧 异步执行建群逻辑，避免飞书回调超时（限制 3 秒）
+      // 后台执行，不阻塞响应
+      setImmediate(() => {
+        this.createGroupWithSessionSelection(openId, selectedSessionId, chatId, messageId, rawDirectory, customChatName)
+          .catch(error => {
+            console.error('[P2P] 后台建群失败:', error);
+            // 通过飞书消息通知用户建群失败
+            this.safeReply(messageId, chatId, `❌ 建群失败: ${error instanceof Error ? error.message : '未知错误'}`)
+              .catch(err => console.error('[P2P] 发送建群失败通知失败:', err));
+          });
+      });
+      
       return;
     }
   }

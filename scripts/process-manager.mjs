@@ -39,6 +39,7 @@ function findBridgeProcesses(excludeSelf = false, excludePid = null) {
     // Windows: 使用 tasklist
     const result = spawnSync('tasklist', ['/FO', 'CSV', '/NH'], {
       encoding: 'utf-8',
+      windowsHide: true,
     });
 
     if (!result.error && result.status === 0) {
@@ -103,6 +104,7 @@ function findOpenCodeProcesses(excludeSelf = false, excludePid = null) {
   if (isWindows()) {
     const result = spawnSync('tasklist', ['/FO', 'CSV', '/NH'], {
       encoding: 'utf-8',
+      windowsHide: true,
     });
 
     if (!result.error && result.status === 0) {
@@ -154,52 +156,96 @@ function findOpenCodeProcesses(excludeSelf = false, excludePid = null) {
 // ==================== 进程判断逻辑 ====================
 
 function isBridgeCommand(command) {
-  // 必须匹配 dist/index.js 才是真正的 Bridge 进程
+  // 统一路径分隔符（Windows 使用反斜杠）
+  const normalizedCmd = command.replace(/\\/g, '/');
+  // 匹配生产模式: dist/index.js 或 dist/admin/index.js
+  // 匹配开发模式: tsx watch src/index.ts 或 tsx src/index.ts
   // 注意：不能只匹配项目名，因为其他脚本也在同一目录下运行
-  return command.includes('dist/index.js');
+  return normalizedCmd.includes('dist/index.js') ||
+         normalizedCmd.includes('dist/admin/index.js') ||
+         /tsx\s+(?:watch\s+)?src\/index\.ts/.test(normalizedCmd);
 }
 
 function isOpenCodeCommand(command) {
+  // 统一路径分隔符
+  const normalizedCmd = command.replace(/\\/g, '/');
   // 排除 bridge 进程本身
-  if (isBridgeCommand(command)) {
+  if (isBridgeCommand(normalizedCmd)) {
     return false;
   }
   // 精确匹配 opencode 命令，避免项目名干扰
-  return /\bopencode\b/.test(command) || command.includes('opencode-cli');
+  return /\bopencode\b/.test(normalizedCmd) || normalizedCmd.includes('opencode-cli');
+}
+
+function getProcessCommandLine(pid) {
+  if (!isWindows()) {
+    return null;
+  }
+
+  try {
+    // 优先使用 PowerShell（Windows 11 兼容）
+    const psResult = spawnSync('powershell', [
+      '-NoProfile',
+      '-Command',
+      `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").CommandLine`
+    ], {
+      encoding: 'utf-8',
+      timeout: 5000,
+      windowsHide: true,
+    });
+
+    if (!psResult.error && psResult.status === 0) {
+      const cmd = (psResult.stdout || '').trim();
+      if (cmd) {
+        return cmd;
+      }
+    }
+  } catch (e) {
+    // PowerShell 失败，尝试 wmic
+  }
+
+  try {
+    // 回退到 wmic（旧版 Windows）
+    const wmicResult = spawnSync('wmic', [
+      'process', 'where', `ProcessId=${pid}`,
+      'get', 'CommandLine', '/value'
+    ], {
+      encoding: 'utf-8',
+      timeout: 5000,
+      windowsHide: true,
+    });
+
+    if (!wmicResult.error && wmicResult.status === 0) {
+      const output = wmicResult.stdout || '';
+      const match = output.match(/CommandLine=(.+)/);
+      if (match) {
+        return match[1].trim();
+      }
+    }
+  } catch (e) {
+    // wmic 也失败
+  }
+
+  return null;
 }
 
 function isBridgeProcessByCommand(pid) {
-  if (isWindows()) {
-    const result = spawnSync('wmic', [
-      'process', 'where', `ProcessId=${pid}`,
-      'get', 'CommandLine', '/value'
-    ], {
-      encoding: 'utf-8',
-    });
-
-    if (!result.error && result.status === 0) {
-      const output = result.stdout || '';
-      return isBridgeCommand(output);
-    }
+  if (!isWindows()) {
+    return false;
   }
-  return false;
+  const cmd = getProcessCommandLine(pid);
+  if (!cmd) {
+    return false;
+  }
+  return isBridgeCommand(cmd);
 }
 
 function isOpenCodeProcessByCommand(pid) {
-  if (isWindows()) {
-    const result = spawnSync('wmic', [
-      'process', 'where', `ProcessId=${pid}`,
-      'get', 'CommandLine', '/value'
-    ], {
-      encoding: 'utf-8',
-    });
-
-    if (!result.error && result.status === 0) {
-      const output = result.stdout || '';
-      return isOpenCodeCommand(output);
-    }
+  if (!isWindows()) {
+    return false;
   }
-  return false;
+  const cmd = getProcessCommandLine(pid);
+  return cmd ? isOpenCodeCommand(cmd) : false;
 }
 
 // ==================== 进程终止 ====================
@@ -223,11 +269,20 @@ function stopProcesses(pids, force = false) {
         ? ['/F', '/PID', String(pid)]
         : ['/PID', String(pid)];
 
-      const result = spawnSync('taskkill', args, {
-        encoding: 'utf-8',
-      });
-
-      stopped = !result.error && result.status === 0;
+      try {
+        const result = spawnSync('taskkill', args, {
+          encoding: 'utf-8',
+          windowsHide: true,
+          timeout: 10000, // 10 秒超时
+        });
+        stopped = !result.error && result.status === 0;
+        if (!stopped && result.error) {
+          console.log(`[process-manager] taskkill PID=${pid} 失败: ${result.error.message}`);
+        }
+      } catch (e) {
+        console.log(`[process-manager] taskkill PID=${pid} 异常: ${e.message}`);
+        stopped = false;
+      }
     } else if (isUnix()) {
       // Unix: 使用 process.kill
       try {
@@ -320,6 +375,7 @@ function main() {
       const pids = findBridgeProcesses(excludeSelf, excludePid);
       if (pids.length === 0) {
         console.log('[process-manager] 未检测到 Bridge 进程');
+        console.log('[process-manager] 提示: Bridge 进程特征为 dist/index.js 或 dist/admin/index.js');
         return;
       }
 

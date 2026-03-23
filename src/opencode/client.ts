@@ -240,6 +240,17 @@ export interface OpencodeAgentInfo {
   native?: boolean;
 }
 
+export interface OpencodeCommandInfo {
+  name: string;
+  description?: string;
+  agent?: string;
+  model?: string;
+  source?: 'command' | 'mcp' | 'skill';
+  template: string;
+  subtask?: boolean;
+  hints: string[];
+}
+
 export interface OpencodeAgentConfig {
   description?: string;
   mode?: AgentMode;
@@ -329,6 +340,15 @@ class OpencodeClientWrapper extends EventEmitter {
   private directoryEventStreams: Map<string, DirectoryEventStreamEntry> = new Map();
   // 防止并发调用 ensureDirectoryEventStream 对同一目录建立多条 SSE 连接
   private pendingDirectoryStreams: Map<string, Promise<void>> = new Map();
+  
+  // 命令列表缓存（5 分钟 TTL）
+  private commandsCache: OpencodeCommandInfo[] | null = null;
+  private commandsCacheTimestamp: number = 0;
+  private readonly COMMANDS_CACHE_TTL = 5 * 60 * 1000; // 5 分钟
+  
+  // OpenCode 版本信息缓存
+  private opencodeVersion: string | null = null;
+  private versionChecked = false;
 
   constructor() {
     super();
@@ -336,45 +356,46 @@ class OpencodeClientWrapper extends EventEmitter {
 
   // 连接到OpenCode服务器
   async connect(): Promise<boolean> {
-    try {
-      console.log(`[OpenCode] 正在连接到 ${opencodeConfig.baseUrl}...`);
+    console.log(`[OpenCode] 正在连接到 ${opencodeConfig.baseUrl}...`);
 
+    try {
       this.client = createOpencodeClient({
         baseUrl: opencodeConfig.baseUrl,
         headers: withOpencodeAuthorizationHeaders(),
       });
 
       // 通过获取会话列表来检查服务器状态
-      try {
-        const result = await this.client.session.list();
-        if (result.error) {
-          const statusCode = result.response?.status;
-          const reason = appendAuthHint(
-            statusCode
-              ? `OpenCode 连接失败（HTTP ${statusCode}）`
-              : `OpenCode 连接失败: ${formatSdkError(result.error)}`,
-            statusCode
-          );
-          console.error(`[OpenCode] ${reason}`);
-          return false;
-        }
+      const result = await this.client.session.list();
 
-        console.log('[OpenCode] 已连接');
-        this.eventListeningEnabled = true;
-        
-        // 启动事件监听
-        void this.startEventListener();
-        return true;
-      } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        const withHint = /\b(401|403)\b/.test(errorMessage)
-          ? `${errorMessage}；${buildAuthEnvHint()}`
-          : errorMessage;
-        console.error(`[OpenCode] 服务器状态异常: ${withHint}`);
+      if (result.error) {
+        const statusCode = result.response?.status;
+        const reason = appendAuthHint(
+          statusCode
+            ? `OpenCode 连接失败（HTTP ${statusCode}）`
+            : `OpenCode 连接失败: ${formatSdkError(result.error)}`,
+          statusCode
+        );
+        console.error(`[OpenCode] ${reason}`);
         return false;
       }
+
+      console.log('[OpenCode] 已连接');
+      this.eventListeningEnabled = true;
+
+      // 启动事件监听
+      void this.startEventListener();
+      return true;
     } catch (error) {
-      console.error('[OpenCode] 连接失败:', error);
+      // 统一错误处理：格式化错误信息并添加认证提示
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const statusCode = /\b(\d{3})\b/.exec(errorMessage)?.[1];
+      const numericCode = statusCode ? parseInt(statusCode, 10) : undefined;
+
+      const reason = appendAuthHint(
+        `OpenCode 连接失败: ${errorMessage}`,
+        numericCode
+      );
+      console.error(`[OpenCode] ${reason}`);
       return false;
     }
   }
@@ -1056,7 +1077,7 @@ class OpencodeClientWrapper extends EventEmitter {
     allow: boolean,
     remember: boolean = false,
     options?: PermissionResponseOptions
-  ): Promise<boolean> {
+  ): Promise<{ ok: boolean; expired?: boolean }> {
     const responseType = allow ? (remember ? 'always' : 'once') : 'reject';
     const directoryCandidates = this.buildPermissionDirectoryCandidates(options);
 
@@ -1075,7 +1096,13 @@ class OpencodeClientWrapper extends EventEmitter {
         );
 
         if (response.ok) {
-          return true;
+          return { ok: true };
+        }
+
+        // 检查是否为过期错误（404 或特定错误信息）
+        if (response.status === 404) {
+          console.warn(`[OpenCode] 权限请求已过期: session=${sessionId}, permission=${permissionId}`);
+          return { ok: false, expired: true };
         }
 
         const detail = await response.text().catch(() => '');
@@ -1092,7 +1119,7 @@ class OpencodeClientWrapper extends EventEmitter {
       }
     }
 
-    return false;
+    return { ok: false };
   }
 
   // 获取工作区列表
@@ -1404,13 +1431,79 @@ class OpencodeClientWrapper extends EventEmitter {
     return agents;
   }
 
+  // 获取可用命令列表（slash command）
+  async getCommands(): Promise<OpencodeCommandInfo[]> {
+    // 1. 检查缓存是否有效
+    const now = Date.now();
+    if (this.commandsCache && (now - this.commandsCacheTimestamp) < this.COMMANDS_CACHE_TTL) {
+      return this.commandsCache;
+    }
+
+    // 2. 版本兼容性检查（仅首次调用时）
+    if (!this.versionChecked) {
+      const versionOk = await this.checkOpenCodeVersion();
+      if (!versionOk) {
+        console.warn('[OpenCode] 当前版本可能不支持 command.list API，继续尝试调用...');
+      }
+      this.versionChecked = true;
+    }
+
+    // 3. 调用 API 获取命令列表
+    try {
+      const client = this.getClient();
+      const result = await client.command.list();
+      const raw = Array.isArray(result.data) ? result.data : [];
+      const commands = raw as OpencodeCommandInfo[];
+      
+      // 4. 更新缓存
+      this.commandsCache = commands;
+      this.commandsCacheTimestamp = now;
+      
+      return commands;
+    } catch (error) {
+      console.error('[OpenCode] 获取命令列表失败:', error);
+      throw error; // 抛出错误让调用者处理
+    }
+  }
+
+  // 检查 OpenCode 版本兼容性
+  private async checkOpenCodeVersion(): Promise<boolean> {
+    try {
+      const client = this.getClient();
+      // 尝试调用 command.list 来检测 API 是否可用
+      const result = await client.command.list();
+      // 如果调用成功且有数据返回，说明 API 可用
+      if (result.data && Array.isArray(result.data)) {
+        return true;
+      }
+      // 如果返回空数组，也说明 API 可用（只是没有命令）
+      return result.data !== undefined;
+    } catch (error) {
+      // 如果调用失败，说明 API 不可用或版本不兼容
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      console.warn('[OpenCode] command.list API 不可用:', errorMessage);
+      return false;
+    }
+  }
+
+  // 获取 OpenCode 版本信息（供外部调用）
+  public getOpencodeVersion(): string | null {
+    return this.opencodeVersion;
+  }
+
+  // 清除命令缓存（用于强制刷新）
+  public clearCommandsCache(): void {
+    this.commandsCache = null;
+    this.commandsCacheTimestamp = 0;
+  }
+
   // 回复问题 (question 工具)
   // answers 是一个二维数组: [[第一个问题的答案们], [第二个问题的答案们], ...]
   // 每个答案是选项的 label
   async replyQuestion(
     requestId: string,
     answers: string[][]
-  ): Promise<boolean> {
+  ): Promise<{ ok: boolean; expired?: boolean }> {
     try {
       const response = await fetch(
         `${opencodeConfig.baseUrl}/question/${requestId}/reply`,
@@ -1421,6 +1514,11 @@ class OpencodeClientWrapper extends EventEmitter {
         }
       );
       if (!response.ok) {
+        // 检查是否为过期错误
+        if (response.status === 404) {
+          console.warn(`[OpenCode] 问题请求已过期: requestId=${requestId}`);
+          return { ok: false, expired: true };
+        }
         const detail = await response.text().catch(() => '');
         const suffix = detail ? `: ${detail.slice(0, 300)}` : '';
         const message = appendAuthHint(
@@ -1429,15 +1527,15 @@ class OpencodeClientWrapper extends EventEmitter {
         );
         console.error(`[OpenCode] ${message}`);
       }
-      return response.ok;
+      return { ok: response.ok };
     } catch (error) {
       console.error('[OpenCode] 回复问题失败:', error);
-      return false;
+      return { ok: false };
     }
   }
 
   // 拒绝/跳过问题
-  async rejectQuestion(requestId: string): Promise<boolean> {
+  async rejectQuestion(requestId: string): Promise<{ ok: boolean; expired?: boolean }> {
     try {
       const response = await fetch(
         `${opencodeConfig.baseUrl}/question/${requestId}/reject`,
@@ -1447,6 +1545,11 @@ class OpencodeClientWrapper extends EventEmitter {
         }
       );
       if (!response.ok) {
+        // 检查是否为过期错误
+        if (response.status === 404) {
+          console.warn(`[OpenCode] 问题请求已过期: requestId=${requestId}`);
+          return { ok: false, expired: true };
+        }
         const detail = await response.text().catch(() => '');
         const suffix = detail ? `: ${detail.slice(0, 300)}` : '';
         const message = appendAuthHint(
@@ -1455,10 +1558,10 @@ class OpencodeClientWrapper extends EventEmitter {
         );
         console.error(`[OpenCode] ${message}`);
       }
-      return response.ok;
+      return { ok: response.ok };
     } catch (error) {
       console.error('[OpenCode] 拒绝问题失败:', error);
-      return false;
+      return { ok: false };
     }
   }
 

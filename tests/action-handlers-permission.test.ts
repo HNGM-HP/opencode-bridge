@@ -42,7 +42,7 @@ describe('permission text action callbacks', () => {
 
     vi.spyOn(permissionHandler, 'peekForChat').mockReturnValue({
       sessionId: 'ses-main',
-      sessionCandidates: ['ses-main', 'ses-parent'],
+      parentSessionId: 'ses-parent',
       permissionId: 'per-1',
       tool: 'Bash',
       description: '执行命令',
@@ -54,8 +54,8 @@ describe('permission text action callbacks', () => {
     vi.spyOn(chatSessionStore, 'getSession').mockReturnValue(undefined);
     vi.spyOn(chatSessionStore, 'getKnownDirectories').mockReturnValue([]);
     vi.spyOn(opencodeClient, 'respondToPermission')
-      .mockResolvedValueOnce(false)
-      .mockResolvedValueOnce(true);
+      .mockResolvedValueOnce({ ok: false })
+      .mockResolvedValueOnce({ ok: true });
     vi.spyOn(permissionHandler, 'resolveForChat').mockReturnValue(undefined);
     vi.spyOn(outputBuffer, 'get').mockReturnValue(undefined);
     vi.spyOn(outputBuffer, 'getOrCreate').mockReturnValue({
@@ -110,7 +110,7 @@ describe('permission text action callbacks', () => {
     vi.spyOn(chatSessionStore, 'getChatId').mockReturnValue('chat-1');
     vi.spyOn(permissionHandler, 'peekForChat').mockReturnValue({
       sessionId: 'ses-main',
-      sessionCandidates: ['ses-main', 'ses-parent'],
+      parentSessionId: 'ses-parent',
       permissionId: 'per-2',
       tool: 'Bash',
       description: '执行命令',
@@ -122,13 +122,14 @@ describe('permission text action callbacks', () => {
     vi.spyOn(chatSessionStore, 'getSession').mockReturnValue(undefined);
     vi.spyOn(chatSessionStore, 'getKnownDirectories').mockReturnValue([]);
     vi.spyOn(opencodeClient, 'respondToPermission')
-      .mockResolvedValueOnce(false)
-      .mockResolvedValueOnce(true);
+      .mockResolvedValueOnce({ ok: false })
+      .mockResolvedValueOnce({ ok: true });
     vi.spyOn(permissionHandler, 'resolveForChat').mockReturnValue(undefined);
     vi.spyOn(outputBuffer, 'touch').mockImplementation(() => undefined);
 
     const result = await callbacks.handlePermissionAction({
       sessionId: 'ses-main',
+      parentSessionId: 'ses-parent',
       permissionId: 'per-2',
       remember: false,
     }, 'permission_allow');
@@ -153,13 +154,12 @@ describe('permission text action callbacks', () => {
   });
 
   it('无待确认权限时，裸权限词不应落入普通 prompt', async () => {
-    vi.useFakeTimers();
     const callbacks = createPermissionActionCallbacks(vi.fn());
 
     vi.spyOn(permissionHandler, 'peekForChat').mockReturnValue(undefined);
     const replySpy = vi.spyOn(feishuClient, 'reply').mockResolvedValue('reply-msg');
 
-    const handledPromise = callbacks.tryHandlePendingPermissionByText({
+    const handled = await callbacks.tryHandlePendingPermissionByText({
       ...baseEvent,
       content: '始终允许',
       rawEvent: {
@@ -171,82 +171,40 @@ describe('permission text action callbacks', () => {
       },
     });
 
-    await vi.advanceTimersByTimeAsync(1600);
-    const handled = await handledPromise;
-
-    expect(handled).toBe(true);
-    expect(replySpy).toHaveBeenCalledWith('msg-1', '当前没有待确认权限，请在权限卡出现后再回复');
+    // 当没有待确认权限时，函数应返回 false，让其他处理器处理
+    expect(handled).toBe(false);
+    // 不应该发送任何消息
+    expect(replySpy).not.toHaveBeenCalled();
   });
 
-  it('私聊里的裸权限词应回传给同用户最近的群聊权限请求', async () => {
+  it('有待确认权限时，无效回复应提示正确格式', async () => {
     const callbacks = createPermissionActionCallbacks(vi.fn());
 
-    vi.spyOn(permissionHandler, 'peekForChat').mockReturnValue(undefined);
-    vi.spyOn(permissionHandler, 'findLatestForUser').mockReturnValue({
-      sessionId: 'ses-group',
-      sessionCandidates: ['ses-group'],
-      permissionId: 'per-p2p-1',
-      tool: 'Write',
-      description: '写入文件',
-      chatId: 'group-chat-1',
-      userId: 'ou-user',
+    vi.spyOn(permissionHandler, 'peekForChat').mockReturnValue({
+      sessionId: 'ses-main',
+      permissionId: 'per-1',
+      tool: 'Bash',
+      description: '执行命令',
+      chatId: 'chat-1',
+      userId: 'user-1',
       createdAt: Date.now(),
     });
-    vi.spyOn(chatSessionStore, 'getConversationBySessionId').mockReturnValue(null);
-    vi.spyOn(chatSessionStore, 'getSession').mockReturnValue(undefined);
-    vi.spyOn(chatSessionStore, 'getKnownDirectories').mockReturnValue([]);
-    vi.spyOn(opencodeClient, 'respondToPermission').mockResolvedValue(true);
-    vi.spyOn(permissionHandler, 'resolveForChat').mockReturnValue(undefined);
-    vi.spyOn(outputBuffer, 'get').mockReturnValue(undefined);
-    vi.spyOn(outputBuffer, 'getOrCreate').mockReturnValue({
-      key: 'chat:group-chat-1',
-      chatId: 'group-chat-1',
-      messageId: null,
-      thinkingMessageId: null,
-      replyMessageId: null,
-      sessionId: 'ses-group',
-      content: [],
-      thinking: [],
-      tools: [],
-      finalText: '',
-      finalThinking: '',
-      openCodeMsgId: '',
-      showThinking: false,
-      dirty: false,
-      lastUpdate: Date.now(),
-      timer: null,
-      updating: false,
-      rerunRequested: false,
-      status: 'running',
-    });
-    vi.spyOn(outputBuffer, 'touch').mockImplementation(() => undefined);
     const replySpy = vi.spyOn(feishuClient, 'reply').mockResolvedValue('reply-msg');
 
+    // 发送一个不能解析为权限决策的内容
     const handled = await callbacks.tryHandlePendingPermissionByText({
       ...baseEvent,
-      chatId: 'p2p-chat-1',
-      chatType: 'p2p',
-      content: '允许',
+      content: '随便说说',
       rawEvent: {
         ...baseEvent.rawEvent,
         message: {
           ...baseEvent.rawEvent.message,
-          chat_id: 'p2p-chat-1',
-          chat_type: 'p2p',
-          content: '{"text":"允许"}',
+          content: '{"text":"随便说说"}',
         },
       },
     });
 
     expect(handled).toBe(true);
-    expect(opencodeClient.respondToPermission).toHaveBeenCalledWith(
-      'ses-group',
-      'per-p2p-1',
-      true,
-      false,
-      expect.any(Object)
-    );
-    expect(permissionHandler.resolveForChat).toHaveBeenCalledWith('group-chat-1', 'per-p2p-1');
-    expect(replySpy).toHaveBeenCalledWith('msg-1', '已允许该权限');
+    expect(replySpy).toHaveBeenCalledWith('msg-1', '当前有待确认权限，请回复：允许 / 拒绝 / 始终允许（也支持 y / n / always）');
   });
 });

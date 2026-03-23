@@ -12,11 +12,14 @@ export type CommandType =
   | 'undo'         // 撤回上一步
   | 'compact'      // 压缩上下文
   | 'model'        // 切换模型
+  | 'models'       // 列出可用模型
   | 'agent'        // 切换Agent
+  | 'agents'       // 列出可用角色
   | 'role'         // 角色相关操作
   | 'session'      // 会话操作
   | 'project'      // 项目/目录操作
   | 'sessions'     // 列出会话
+  | 'commands'     // 列出可用命令
   | 'clear'        // 清空对话
   | 'panel'        // 控制面板
   | 'effort'       // 调整推理强度
@@ -95,6 +98,44 @@ function isSlashCommandToken(token: string): boolean {
   return /^[\p{L}\p{N}_.?-]+$/u.test(normalized);
 }
 
+function isDoubleSlashCommandToken(token: string): boolean {
+  const normalized = token.trim();
+  if (!normalized) {
+    return false;
+  }
+
+  if (normalized.includes('/') || normalized.includes('\\')) {
+    return false;
+  }
+
+  // 双斜杠透传允许命名空间（:）
+  return /^[\p{L}\p{N}_.?:-]+$/u.test(normalized);
+}
+
+function parseDoubleSlashCommand(trimmed: string): ParsedCommand | null {
+  if (!trimmed.startsWith('//')) {
+    return null;
+  }
+
+  const body = trimmed.slice(2).trimStart();
+  if (!body || body.includes('\n')) {
+    return null;
+  }
+
+  const parts = body.split(/\s+/);
+  const first = parts[0]?.trim();
+  if (!first || !isDoubleSlashCommandToken(first)) {
+    return null;
+  }
+
+  return {
+    type: 'command',
+    commandName: first,  // 保留原始大小写，OpenCode 命令区分大小写
+    commandArgs: parts.slice(1).join(' '),
+    commandPrefix: '/',
+  };
+}
+
 function parseBangShellCommand(trimmed: string): ParsedCommand | null {
   if (!trimmed.startsWith('!')) {
     return null;
@@ -135,6 +176,12 @@ function parseBangShellCommand(trimmed: string): ParsedCommand | null {
 export function parseCommand(text: string): ParsedCommand {
   const trimmed = text.trim();
   const lower = trimmed.toLowerCase();
+
+  // //xxx:yyy 透传命令（用于支持带命名空间的 slash）
+  const doubleSlashCommand = parseDoubleSlashCommand(trimmed);
+  if (doubleSlashCommand) {
+    return doubleSlashCommand;
+  }
 
   // ! 开头的 shell 透传（白名单）
   const bangCommand = parseBangShellCommand(trimmed);
@@ -186,7 +233,8 @@ export function parseCommand(text: string): ParsedCommand {
       return { type: 'prompt', text: trimmed };
     }
 
-    const cmd = parts[0].toLowerCase();
+    const originalCmd = parts[0];  // 保留原始大小写
+    const cmd = originalCmd.toLowerCase();  // 用于 switch 匹配
     const args = parts.slice(1);
     const rawArgsText = body.slice(parts[0].length).trim();
 
@@ -223,11 +271,17 @@ export function parseCommand(text: string): ParsedCommand {
         }
         return { type: 'model' }; // 无参数时显示当前模型
 
+      case 'models':
+        return { type: 'models' }; // 列出所有可用模型
+
       case 'agent':
         if (args.length > 0) {
           return { type: 'agent', agentName: args.join(' ') };
         }
         return { type: 'agent' }; // 无参数时显示当前agent
+
+      case 'agents':
+        return { type: 'agents' }; // 列出所有可用角色
 
       case 'role':
       case '角色': {
@@ -270,6 +324,12 @@ export function parseCommand(text: string): ParsedCommand {
       case 'sessions':
       case 'list':
         return { type: 'sessions', listAll: args.length > 0 && args[0].toLowerCase() === 'all' };
+
+      case 'commands':
+      case 'slash':
+      case 'slash-commands':
+      case 'slash_commands':
+        return { type: 'commands' };
 
       case 'project':
         if (args.length === 0) {
@@ -391,10 +451,10 @@ export function parseCommand(text: string): ParsedCommand {
       }
 
       default:
-        // 未知命令透传到OpenCode
+        // 未知命令透传到OpenCode（保留原始大小写）
         return {
           type: 'command',
-          commandName: cmd,
+          commandName: originalCmd,
           commandArgs: args.join(' '),
           commandPrefix: '/',
         };
@@ -447,6 +507,7 @@ export function getHelpText(): string {
 • \`/project list\` 列出可用项目；\`/project default\` 查看/设置/清除群默认项目
 • \`/clear\` 等价 \`/session new\`；\`/clear free session\` 清理空闲群聊并手动扫描僵尸 Cron
 • \`/status\` 查看当前绑定状态和群聊生命周期信息
+ • \`/commands\` 生成并发送最新命令清单文件
 
 💡 **提示**
 • 切换的模型/角色仅对**当前会话**生效。
@@ -454,6 +515,7 @@ export function getHelpText(): string {
 • \`/cron\` 支持自然语言，复杂语义默认交给 OpenCode 解析后再落盘为调度任务。
 • Cron 默认绑定创建它的聊天窗口与当前 OpenCode 会话；如果当前聊天没有绑定会话，将拒绝创建。
 • 其他未知 \`/xxx\` 命令会自动透传给 OpenCode（会话已绑定时生效）。
+ • 支持 \`//xxx\` 形式透传命名空间命令（如 \`//superpowers:brainstorming\`）。
 • 支持透传白名单 shell 命令：\`!cd\`、\`!ls\`、\`!mkdir\`、\`!rm\`、\`!cp\`、\`!mv\`、\`!git\` 等；\`!vi\` / \`!vim\` / \`!nano\` 不会透传。
 • 如果遇到问题，试着使用 \`/panel\` 面板操作更方便。
 
