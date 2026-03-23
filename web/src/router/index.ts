@@ -54,6 +54,11 @@ router.beforeEach(async (to, _from, next) => {
 
   // 修改密码页
   if (to.path === '/change-password') {
+    // 首次设置密码模式（mode=setup）允许无 token 访问
+    if (to.query.mode === 'setup') {
+      next()
+      return
+    }
     if (!token) {
       next('/login')
     } else {
