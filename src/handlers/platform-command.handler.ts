@@ -195,6 +195,8 @@ export class PlatformCommandHandler {
         return 'QQ';
       case 'wecom':
         return '企业微信';
+      case 'dingtalk':
+        return '钉钉';
       default:
         return this.platform;
     }

@@ -145,6 +145,10 @@ export const whatsappConfig = {
   get businessWebhookVerifyToken() { return process.env.WHATSAPP_BUSINESS_WEBHOOK_VERIFY_TOKEN?.trim() || undefined; },
 };
 
+export const dingtalkConfig = {
+  get enabled() { return parseBooleanEnv(process.env.DINGTALK_ENABLED, false); },
+};
+
 // ──────────────────────────────────────────────
 // 其他配置
 // ──────────────────────────────────────────────
@@ -341,6 +345,7 @@ export function validateConfig(): void {
       (whatsappConfig.mode === 'personal') ||
       (whatsappConfig.mode === 'business' && whatsappConfig.businessPhoneId && whatsappConfig.businessAccessToken)
     )),
+    dingtalk: !!(dingtalkConfig.enabled),
   };
 
   const hasAnyPlatform = Object.values(platformStatus).some(Boolean);
@@ -385,6 +390,9 @@ export function validateConfig(): void {
         errors.push('  - WhatsApp: 配置不完整');
       }
     }
+    if (!platformStatus.dingtalk) {
+      errors.push('  - 钉钉: 未启用或未配置账号');
+    }
   }
 
   if (errors.length > 0) {
@@ -392,7 +400,7 @@ export function validateConfig(): void {
   }
 }
 
-export function isPlatformConfigured(platform: 'feishu' | 'discord' | 'wecom' | 'telegram' | 'qq' | 'whatsapp'): boolean {
+export function isPlatformConfigured(platform: 'feishu' | 'discord' | 'wecom' | 'telegram' | 'qq' | 'whatsapp' | 'dingtalk'): boolean {
   switch (platform) {
     case 'feishu':
       return !!(feishuConfig.enabled && feishuConfig.appId && feishuConfig.appSecret);
@@ -411,6 +419,8 @@ export function isPlatformConfigured(platform: 'feishu' | 'discord' | 'wecom' | 
       if (!whatsappConfig.enabled) return false;
       return whatsappConfig.mode === 'personal' ||
         !!(whatsappConfig.businessPhoneId && whatsappConfig.businessAccessToken);
+    case 'dingtalk':
+      return dingtalkConfig.enabled;
     default:
       return false;
   }

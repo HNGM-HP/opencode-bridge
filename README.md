@@ -1,6 +1,6 @@
 # OpenCode Bridge
 
-[![v2.9.5](https://img.shields.io/badge/v2.9.5-3178C6)]()
+[![v2.9.51](https://img.shields.io/badge/v2.9.51-3178C6)]()
 [![Node.js >= 18](https://img.shields.io/badge/Node.js-%3E%3D18-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![License: GPLv3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
@@ -24,6 +24,7 @@
 | QQ (OneBot) | ✅ 完整支持 | 文本交互、群聊支持 |
 | WhatsApp | ✅ 完整支持 | 文本交互、媒体消息 |
 | 个人微信 | ✅ 完整支持 | 扫码登录、文本交互 |
+| 钉钉 (DingTalk) | ✅ 完整支持 | Stream 模式、单聊群聊、消息收发 |
 
 ---
 
@@ -219,6 +220,7 @@ http://localhost:4098
 | [QQ 配置](assets/docs/qq-config.md) | QQ 官方/OneBot 协议配置指南 |
 | [WhatsApp 配置](assets/docs/whatsapp-config.md) | WhatsApp Personal/Business 配置指南 |
 | [微信个人号配置](assets/docs/weixin-config.md) | 微信个人号配置指南 |
+| [钉钉配置](assets/docs/dingtalk-config.md) | 钉钉机器人 Stream 模式配置指南 |
 
 ### 扩展文档
 

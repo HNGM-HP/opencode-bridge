@@ -27,6 +27,8 @@ export interface BridgeSettings {
   WECOM_SECRET?: string
   // Weixin
   WEIXIN_ENABLED?: string
+  // DingTalk
+  DINGTALK_ENABLED?: string
   // Telegram
   TELEGRAM_ENABLED?: string
   TELEGRAM_BOT_TOKEN?: string
@@ -207,6 +209,18 @@ export interface WeixinLoginSession {
   error?: string
 }
 
+// 钉钉账号类型
+export interface DingtalkAccount {
+  id: string
+  accountId: string
+  clientId: string
+  clientSecret: string
+  name: string
+  enabled: boolean
+  endpoint: string
+  createdAt: string
+}
+
 // Session 管理相关类型
 export interface SessionBindingItem {
   platform: string
@@ -320,6 +334,61 @@ export const weixinApi = {
 
   async cancelLogin(sessionId: string): Promise<{ ok: boolean }> {
     const res = await http.post<{ ok: boolean }>('/weixin/login/cancel', { sessionId })
+    return res.data
+  },
+}
+
+export const dingtalkApi = {
+  async getAccounts(): Promise<DingtalkAccount[]> {
+    const res = await http.get<{ accounts: DingtalkAccount[] }>('/dingtalk/accounts')
+    return res.data.accounts
+  },
+
+  async createAccount(data: {
+    accountId: string
+    clientId: string
+    clientSecret: string
+    name?: string
+    endpoint?: string
+  }): Promise<{ ok: boolean; message: string }> {
+    const res = await http.post<{ ok: boolean; message: string }>('/dingtalk/accounts', data)
+    return res.data
+  },
+
+  async updateAccount(id: string, data: {
+    clientId?: string
+    clientSecret?: string
+    name?: string
+    endpoint?: string
+  }): Promise<{ ok: boolean; message: string }> {
+    const res = await http.put<{ ok: boolean; message: string }>(`/dingtalk/accounts/${id}`, data)
+    return res.data
+  },
+
+  async deleteAccount(id: string): Promise<{ ok: boolean }> {
+    const res = await http.delete<{ ok: boolean }>(`/dingtalk/accounts/${id}`)
+    return res.data
+  },
+
+  async toggleAccount(id: string, enabled: boolean): Promise<{ ok: boolean; enabled: boolean }> {
+    const res = await http.post<{ ok: boolean; enabled: boolean }>(`/dingtalk/accounts/${id}/toggle`, { enabled })
+    return res.data
+  },
+}
+
+export type WhatsAppConnectionStatus = 'connected' | 'need_scan' | 'disconnected' | 'connecting'
+
+export interface WhatsAppStatus {
+  ok: boolean
+  enabled: boolean
+  mode: 'personal' | 'business'
+  status: WhatsAppConnectionStatus
+  qrCode?: string
+}
+
+export const whatsappApi = {
+  async getStatus(): Promise<WhatsAppStatus> {
+    const res = await http.get<WhatsAppStatus>('/whatsapp/status')
     return res.data
   },
 }

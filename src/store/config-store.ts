@@ -43,6 +43,9 @@ export interface BridgeSettings {
   // 个人微信
   WEIXIN_ENABLED?: string;
 
+  // 钉钉
+  DINGTALK_ENABLED?: string;
+
   // Telegram
   TELEGRAM_ENABLED?: string;
   TELEGRAM_BOT_TOKEN?: string;
@@ -212,6 +215,26 @@ class ConfigStore {
         account_id TEXT PRIMARY KEY,
         offset_buf TEXT NOT NULL DEFAULT '',
         updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+      -- 钉钉账号表
+      CREATE TABLE IF NOT EXISTS dingtalk_accounts (
+        account_id    TEXT PRIMARY KEY,
+        client_id     TEXT NOT NULL,
+        client_secret TEXT NOT NULL,
+        name          TEXT NOT NULL DEFAULT '',
+        enabled       INTEGER NOT NULL DEFAULT 1,
+        endpoint      TEXT NOT NULL DEFAULT 'https://api.dingtalk.com',
+        created_at    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+      -- 钉钉会话 webhook 缓存表
+      CREATE TABLE IF NOT EXISTS dingtalk_session_webhooks (
+        account_id      TEXT NOT NULL,
+        conversation_id TEXT NOT NULL,
+        webhook         TEXT NOT NULL,
+        expired_time    INTEGER NOT NULL,
+        updated_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (account_id, conversation_id)
       );
     `);
   }
@@ -446,6 +469,112 @@ class ConfigStore {
       )
       .run(accountId, offsetBuf, now);
   }
+
+  // ──────────────────────────────────────────────
+  // 钉钉账号管理
+  // ──────────────────────────────────────────────
+
+  /** 获取所有钉钉账号 */
+  getDingtalkAccounts(): DingtalkAccountRow[] {
+    return this.db
+      .prepare<[], DingtalkAccountRow>('SELECT * FROM dingtalk_accounts ORDER BY created_at DESC')
+      .all();
+  }
+
+  /** 获取单个钉钉账号 */
+  getDingtalkAccount(accountId: string): DingtalkAccountRow | undefined {
+    return this.db
+      .prepare<[string], DingtalkAccountRow>('SELECT * FROM dingtalk_accounts WHERE account_id = ?')
+      .get(accountId);
+  }
+
+  /** 插入或更新钉钉账号 */
+  upsertDingtalkAccount(params: {
+    accountId: string;
+    clientId: string;
+    clientSecret: string;
+    name?: string;
+    enabled?: boolean;
+    endpoint?: string;
+  }): void {
+    const now = new Date().toISOString();
+    this.db
+      .prepare(
+        `INSERT INTO dingtalk_accounts (account_id, client_id, client_secret, name, enabled, endpoint, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(account_id) DO UPDATE SET
+           client_id = excluded.client_id,
+           client_secret = excluded.client_secret,
+           name = COALESCE(excluded.name, dingtalk_accounts.name),
+           enabled = excluded.enabled,
+           endpoint = COALESCE(excluded.endpoint, dingtalk_accounts.endpoint),
+           updated_at = excluded.updated_at`
+      )
+      .run(
+        params.accountId,
+        params.clientId,
+        params.clientSecret,
+        params.name || params.accountId,
+        params.enabled !== false ? 1 : 0,
+        params.endpoint || 'https://api.dingtalk.com',
+        now,
+        now
+      );
+  }
+
+  /** 删除钉钉账号 */
+  deleteDingtalkAccount(accountId: string): boolean {
+    const result = this.db.prepare('DELETE FROM dingtalk_accounts WHERE account_id = ?').run(accountId);
+    // 同时清理相关的 session_webhooks
+    this.db.prepare('DELETE FROM dingtalk_session_webhooks WHERE account_id = ?').run(accountId);
+    return result.changes > 0;
+  }
+
+  /** 设置钉钉账号启用状态 */
+  setDingtalkAccountEnabled(accountId: string, enabled: boolean): void {
+    const now = new Date().toISOString();
+    this.db
+      .prepare('UPDATE dingtalk_accounts SET enabled = ?, updated_at = ? WHERE account_id = ?')
+      .run(enabled ? 1 : 0, now, accountId);
+  }
+
+  // ──────────────────────────────────────────────
+  // 钉钉会话 webhook 缓存管理
+  // ──────────────────────────────────────────────
+
+  /** 获取缓存的 session webhook */
+  getDingtalkSessionWebhook(accountId: string, conversationId: string): { webhook: string; expiredTime: number } | null {
+    const row = this.db
+      .prepare<[string, string], { webhook: string; expired_time: number }>(
+        'SELECT webhook, expired_time FROM dingtalk_session_webhooks WHERE account_id = ? AND conversation_id = ?'
+      )
+      .get(accountId, conversationId);
+
+    if (!row) return null;
+
+    // 检查是否过期
+    if (row.expired_time < Date.now()) {
+      // 删除过期记录
+      this.db
+        .prepare('DELETE FROM dingtalk_session_webhooks WHERE account_id = ? AND conversation_id = ?')
+        .run(accountId, conversationId);
+      return null;
+    }
+
+    return { webhook: row.webhook, expiredTime: row.expired_time };
+  }
+
+  /** 缓存 session webhook */
+  upsertDingtalkSessionWebhook(accountId: string, conversationId: string, webhook: string, expiredTime: number): void {
+    const now = new Date().toISOString();
+    this.db
+      .prepare(
+        `INSERT INTO dingtalk_session_webhooks (account_id, conversation_id, webhook, expired_time, updated_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(account_id, conversation_id) DO UPDATE SET webhook = excluded.webhook, expired_time = excluded.expired_time, updated_at = excluded.updated_at`
+      )
+      .run(accountId, conversationId, webhook, expiredTime, now);
+  }
 }
 
 export const configStore = new ConfigStore();
@@ -463,6 +592,21 @@ export interface WeixinAccountRow {
   name: string;
   enabled: number;
   last_login_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+// ──────────────────────────────────────────────
+// 钉钉账号类型定义
+// ──────────────────────────────────────────────
+
+export interface DingtalkAccountRow {
+  account_id: string;
+  client_id: string;
+  client_secret: string;
+  name: string;
+  enabled: number;
+  endpoint: string;
   created_at: string;
   updated_at: string;
 }

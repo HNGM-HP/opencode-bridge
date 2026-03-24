@@ -10,6 +10,7 @@ import { telegramAdapter } from './platform/adapters/telegram-adapter.js';
 import { qqAdapter } from './platform/adapters/qq-adapter.js';
 import { whatsappAdapter } from './platform/adapters/whatsapp-adapter.js';
 import { weixinAdapter } from './platform/adapters/weixin-adapter.js';
+import { dingtalkAdapter } from './platform/adapters/dingtalk/dingtalk-adapter.js';
 import type { PlatformSender } from './platform/types.js';
 import { opencodeClient, type PermissionRequestEvent } from './opencode/client.js';
 import { streamStateManager, type ToolRuntimeState, type TimelineSegment, type StreamTimelineState } from './store/stream-state.js';
@@ -32,6 +33,8 @@ function getSenderByPlatform(platform: string): PlatformSender | null {
       return whatsappAdapter.getSender();
     case 'weixin':
       return weixinAdapter.getSender();
+    case 'dingtalk':
+      return dingtalkAdapter.getSender();
     default:
       console.warn(`[getSenderByPlatform] 未知平台: ${platform}, 使用飞书作为fallback`);
       return feishuAdapter.getSender();
@@ -51,6 +54,7 @@ import { telegramHandler } from './handlers/telegram.js';
 import { qqHandler } from './handlers/qq.js';
 import { whatsappHandler } from './handlers/whatsapp.js';
 import { weixinHandler } from './handlers/weixin.js';
+import { dingtalkHandler } from './handlers/dingtalk.js';
 import { commandHandler } from './handlers/command.js';
 import { cardActionHandler } from './handlers/card-action.js';
 import { validateConfig, routerConfig, outputConfig, reliabilityConfig, opencodeConfig, isPlatformConfigured } from './config.js';
@@ -533,7 +537,7 @@ async function main() {
   initLogger(logStore);
 
   console.log('╔════════════════════════════════════════════════╗');
-  console.log('║   飞书 × OpenCode 桥接服务 v2.9.5      ║');
+  console.log('║   飞书 × OpenCode 桥接服务 v2.9.51     ║');
   console.log('╚════════════════════════════════════════════════╝');
 
   // 1. 如果启用了 OpenCode 自动启动，先清理旧进程并启动
@@ -1603,6 +1607,12 @@ async function main() {
     await weixinHandler.handleMessage(event, sender);
   });
 
+  // 钉钉消息监听
+  dingtalkAdapter.onMessage(async (event) => {
+    const sender = dingtalkAdapter.getSender();
+    await dingtalkHandler.handleMessage(event, sender);
+  });
+
 
   // 6. OpenCode 事件监听已移至 openCodeEventHub（单一入口）
 
@@ -1751,6 +1761,14 @@ async function main() {
     // Weixin 启动失败不影响其他平台流程
   }
 
+  // 7.11. 启动钉钉适配器（如果启用）
+  try {
+    await dingtalkAdapter.start();
+  } catch (e) {
+    console.error('[钉钉] 启动失败:', e);
+    // 钉钉启动失败不影响其他平台流程
+  }
+
   // 8. 启动飞书客户端
   if (isPlatformConfigured('feishu')) {
     feishuClient.setCardActionHandler(async (event) => {
@@ -1849,6 +1867,13 @@ async function main() {
       weixinAdapter.stop();
     } catch (e) {
       console.error('[个人微信] 停止适配器失败:', e);
+    }
+
+    // 3.10. 停止钉钉适配器
+    try {
+      dingtalkAdapter.stop();
+    } catch (e) {
+      console.error('[钉钉] 停止适配器失败:', e);
     }
 
     // 4. 停止飞书连接

@@ -1,6 +1,6 @@
 {
   "name": "opencode-bridge",
-  "version": "2.9.5",
+  "version": "2.9.51",
   "type": "module",
   "description": "Feishu / Discord × OpenCode bridge service with runtime cron and reliability tooling",
   "main": "dist/index.js",
@@ -23,6 +23,7 @@
     ".env.example"
   ],
   "scripts": {
+    "preinstall": "node scripts/setup-mirror.mjs",
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "build:web": "cd web && pnpm install && pnpm run build",
@@ -62,6 +63,7 @@
     "@wecom/aibot-node-sdk": "^1.0.4",
     "@whiskeysockets/baileys": "^7.0.0-rc.9",
     "better-sqlite3": "^12.8.0",
+    "dingtalk-stream": "^2.1.4",
     "discord.js": "^14.25.1",
     "dotenv": "^16.4.5",
     "express": "^5.2.1",

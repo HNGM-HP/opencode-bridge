@@ -10,6 +10,8 @@ import makeWASocket, {
   DisconnectReason,
   useMultiFileAuthState,
   downloadMediaMessage,
+  fetchLatestBaileysVersion,
+  makeCacheableSignalKeyStore,
   type WASocket,
   type WAMessage,
   type ConnectionState,
@@ -25,8 +27,12 @@ import { whatsappConfig } from '../../config.js';
 import path from 'node:path';
 import fs from 'node:fs';
 import { Boom } from '@hapi/boom';
+import QRCode from 'qrcode';
 
 const WHATSAPP_MESSAGE_LIMIT = 4096;
+
+// 状态文件路径（用于跨进程通信）
+const STATUS_FILE_PATH = path.join(process.cwd(), 'data', 'whatsapp-status.json');
 
 /**
  * WhatsApp Personal 模式发送器实现 (baileys)
@@ -343,6 +349,52 @@ class WhatsAppBusinessSender implements PlatformSender {
 }
 
 /**
+ * WhatsApp 连接状态
+ */
+export type WhatsAppConnectionStatus = 'connected' | 'need_scan' | 'disconnected' | 'connecting';
+
+/**
+ * WhatsApp 连接状态响应
+ */
+export interface WhatsAppStatusInfo {
+  enabled: boolean;
+  mode: 'personal' | 'business';
+  status: WhatsAppConnectionStatus;
+  qrCode?: string; // base64 Data URL
+}
+
+/**
+ * 写入状态文件（用于跨进程通信）
+ */
+function writeStatusFile(status: WhatsAppStatusInfo): void {
+  try {
+    const dir = path.dirname(STATUS_FILE_PATH);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    fs.writeFileSync(STATUS_FILE_PATH, JSON.stringify(status, null, 2), 'utf-8');
+  } catch (err) {
+    console.error('[WhatsApp] 写入状态文件失败:', err);
+  }
+}
+
+/**
+ * 读取状态文件（用于 Admin Server 获取状态）
+ */
+export function readStatusFile(): WhatsAppStatusInfo | null {
+  try {
+    if (!fs.existsSync(STATUS_FILE_PATH)) {
+      return null;
+    }
+    const content = fs.readFileSync(STATUS_FILE_PATH, 'utf-8');
+    return JSON.parse(content) as WhatsAppStatusInfo;
+  } catch (err) {
+    console.error('[WhatsApp] 读取状态文件失败:', err);
+    return null;
+  }
+}
+
+/**
  * WhatsApp 平台适配器实现
  */
 export class WhatsAppAdapter implements PlatformAdapter {
@@ -350,6 +402,8 @@ export class WhatsAppAdapter implements PlatformAdapter {
 
   private socket: WASocket | null = null;
   private qrCode: string | null = null;
+  private qrCodeDataUrl: string | null = null;
+  private connectionStatus: WhatsAppConnectionStatus = 'disconnected';
   private isActive = false;
   private personalSender: WhatsAppPersonalSender | null = null;
   private businessSender: WhatsAppBusinessSender | null = null;
@@ -397,6 +451,21 @@ export class WhatsAppAdapter implements PlatformAdapter {
   private async startPersonalMode(): Promise<void> {
     console.log('[WhatsApp] 启动 Personal 模式 (baileys)');
 
+    // 清理旧连接
+    if (this.socket) {
+      console.log('[WhatsApp] 清理旧的 socket 连接...');
+      try {
+        this.socket.end(undefined);
+      } catch (e) {
+        // 忽略清理错误
+      }
+      this.socket = null;
+    }
+
+    this.connectionStatus = 'connecting';
+    // 写入状态文件
+    writeStatusFile(this.getStatus());
+
     const sessionPath = whatsappConfig.sessionPath || path.join(process.cwd(), 'data', 'whatsapp-session');
 
     // 确保目录存在
@@ -407,49 +476,117 @@ export class WhatsAppAdapter implements PlatformAdapter {
     try {
       const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
 
+      // 获取最新 baileys 版本（关键：WhatsApp 服务器需要匹配的版本）
+      const { version } = await fetchLatestBaileysVersion();
+      console.log('[WhatsApp] 使用 Baileys 版本:', version.join('.'));
+
+      // 创建简单的 logger（兼容 pino 接口）
+      const createSilentLogger = (): Record<string, unknown> => {
+        const logger: Record<string, unknown> = {
+          level: 'silent',
+          child: () => logger,
+          trace: () => {},
+          debug: () => {},
+          info: () => {},
+          warn: () => {},
+          error: () => {},
+          fatal: () => {},
+        };
+        return logger;
+      };
+      const logger = createSilentLogger();
+
       this.socket = makeWASocket({
-        auth: state,
-        printQRInTerminal: true,
+        auth: {
+          creds: state.creds,
+          keys: makeCacheableSignalKeyStore(state.keys, logger as ReturnType<typeof import('pino')>),
+        },
+        version,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        logger: logger as any,
+        browser: ['OpenCode Bridge', 'Chrome', '1.0.0'],
         connectTimeoutMs: 60000,
         keepAliveIntervalMs: 25000,
+        syncFullHistory: false,
+        markOnlineOnConnect: false,
       });
 
       // 连接状态更新
-      this.socket.ev.on('connection.update', (update: Partial<ConnectionState>) => {
+      this.socket.ev.on('connection.update', async (update: Partial<ConnectionState>) => {
         const { connection, lastDisconnect, qr } = update;
 
         if (qr) {
           this.qrCode = qr;
-          console.log('[WhatsApp] 请扫描二维码登录');
-          console.log('[WhatsApp] 二维码已生成，可通过 getQrCode() 方法获取');
+          this.connectionStatus = 'need_scan';
+          // 将原始二维码转换为 base64 Data URL
+          try {
+            this.qrCodeDataUrl = await QRCode.toDataURL(qr, { width: 256 });
+            console.log('[WhatsApp] 二维码已生成，可通过前端页面扫码');
+            // 写入状态文件（包含二维码）
+            writeStatusFile(this.getStatus());
+          } catch (err) {
+            console.error('[WhatsApp] 生成二维码图片失败:', err);
+            this.qrCodeDataUrl = null;
+            writeStatusFile(this.getStatus());
+          }
         }
 
         if (connection === 'close') {
           this.isActive = false;
           this.qrCode = null;
+          this.qrCodeDataUrl = null;
+          this.connectionStatus = 'disconnected';
+          // 写入状态文件
+          writeStatusFile(this.getStatus());
 
-          const shouldReconnect = lastDisconnect?.error instanceof Boom
-            ? lastDisconnect.error.output?.statusCode !== DisconnectReason.loggedOut
-            : true;
+          const statusCode = lastDisconnect?.error instanceof Boom
+            ? lastDisconnect.error.output?.statusCode
+            : undefined;
 
-          console.log('[WhatsApp] 连接已关闭，原因:', lastDisconnect?.error?.message);
+          console.log('[WhatsApp] 连接已关闭，原因:', lastDisconnect?.error?.message, '状态码:', statusCode);
 
-          if (shouldReconnect) {
-            console.log('[WhatsApp] 尝试重新连接...');
+          // 401 = 未授权/需要重新扫码
+          // connectionReplaced = 连接被替换（另一个地方登录）
+          // loggedOut = 已登出
+          const needsRescan = statusCode === 401
+            || statusCode === DisconnectReason.loggedOut
+            || lastDisconnect?.error?.message?.includes('conflict');
+
+          if (needsRescan) {
+            console.log('[WhatsApp] 需要重新扫码登录');
+            // 清空 session 文件，强制重新扫码
+            const sessionPath = whatsappConfig.sessionPath || path.join(process.cwd(), 'data', 'whatsapp-session');
+            try {
+              if (fs.existsSync(sessionPath)) {
+                fs.rmSync(sessionPath, { recursive: true, force: true });
+                console.log('[WhatsApp] 已清空 session 文件，请重新扫码');
+              }
+            } catch (err) {
+              console.error('[WhatsApp] 清空 session 失败:', err);
+            }
+          } else if (statusCode === DisconnectReason.restartRequired) {
+            console.log('[WhatsApp] 需要重启连接...');
+            this.connectionStatus = 'connecting';
+            writeStatusFile(this.getStatus());
             setTimeout(() => {
               this.startPersonalMode().catch(error => {
-                console.error('[WhatsApp] 重连失败:', error);
+                console.error('[WhatsApp] 重启失败:', error);
               });
             }, 5000);
           } else {
-            console.log('[WhatsApp] 账号已登出，需要重新扫码登录');
+            // 其他错误，不自动重连，等待用户手动操作
+            console.log('[WhatsApp] 连接已断开，请在前端点击"扫码登录"按钮重新连接');
           }
         }
 
         if (connection === 'open') {
           this.isActive = true;
           this.qrCode = null;
+          this.qrCodeDataUrl = null;
+          this.connectionStatus = 'connected';
           console.log('[WhatsApp] 已连接');
+          // 写入状态文件
+          writeStatusFile(this.getStatus());
         }
       });
 
@@ -498,6 +635,8 @@ export class WhatsAppAdapter implements PlatformAdapter {
     }
     this.isActive = false;
     this.qrCode = null;
+    this.qrCodeDataUrl = null;
+    this.connectionStatus = 'disconnected';
     this.messageConversationMap.clear();
     console.log('[WhatsApp] 适配器已停止');
   }
@@ -535,6 +674,20 @@ export class WhatsAppAdapter implements PlatformAdapter {
    */
   async getQrCode(): Promise<string | null> {
     return this.qrCode;
+  }
+
+  /**
+   * 获取连接状态和二维码（用于前端展示）
+   */
+  getStatus(): WhatsAppStatusInfo {
+    return {
+      enabled: whatsappConfig.enabled,
+      mode: whatsappConfig.mode,
+      status: whatsappConfig.mode === 'business'
+        ? (this.isActive ? 'connected' : 'disconnected')
+        : this.connectionStatus,
+      qrCode: this.qrCodeDataUrl || undefined,
+    };
   }
 
   private async handleMessage(message: WAMessage): Promise<void> {

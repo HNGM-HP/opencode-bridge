@@ -1,6 +1,6 @@
 # OpenCode Bridge
 
-[![v2.9.5](https://img.shields.io/badge/v2.9.5-3178C6)]()
+[![v2.9.51](https://img.shields.io/badge/v2.9.51-3178C6)]()
 [![Node.js >= 18](https://img.shields.io/badge/Node.js-%3E%3D18-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![License: GPLv3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
@@ -24,6 +24,7 @@
 | QQ (OneBot) | ✅ Full Support | Text interaction, group chat support |
 | WhatsApp | ✅ Full Support | Text interaction, media messages |
 | WeChat (Personal) | ✅ Full Support | QR code login, text interaction |
+| DingTalk | ✅ Full Support | Stream mode, direct/group chat, message sending/receiving |
 
 ---
 
@@ -219,6 +220,7 @@ You will be prompted to set an administrator password on first access.
 | [QQ Config](assets/docs/qq-config-en.md) | QQ Official/OneBot protocol configuration guide |
 | [WhatsApp Config](assets/docs/whatsapp-config-en.md) | WhatsApp Personal/Business configuration guide |
 | [WeChat Personal Config](assets/docs/weixin-config-en.md) | WeChat personal account configuration guide |
+| [DingTalk Config](assets/docs/dingtalk-config-en.md) | DingTalk bot Stream mode configuration guide |
 
 ### Extended Documentation
 

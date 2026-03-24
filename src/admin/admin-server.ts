@@ -46,6 +46,8 @@ const RESTART_REQUIRED_KEYS: (keyof BridgeSettings)[] = [
   'WECOM_ENABLED',
   'WECOM_BOT_ID',
   'WECOM_SECRET',
+  'WEIXIN_ENABLED',
+  'DINGTALK_ENABLED',
   'TELEGRAM_ENABLED',
   'TELEGRAM_BOT_TOKEN',
   'QQ_ENABLED',
@@ -691,6 +693,7 @@ export function createAdminServer(options: AdminServerOptions): { start: () => v
         qq: { status: 'unknown', message: '' },
         whatsapp: { status: 'unknown', message: '' },
         weixin: { status: 'unknown', message: '' },
+        dingtalk: { status: 'unknown', message: '' },
       },
     };
 
@@ -844,6 +847,24 @@ export function createAdminServer(options: AdminServerOptions): { start: () => v
       }
     } catch (e: any) {
       health.checks.weixin = { status: 'error', message: e.message };
+    }
+
+    // 检测钉钉配置
+    try {
+      const settings = configStore.get();
+      if (settings.DINGTALK_ENABLED === 'true') {
+        const accounts = configStore.getDingtalkAccounts();
+        const enabledAccounts = accounts.filter(a => a.enabled === 1);
+        if (enabledAccounts.length > 0) {
+          health.checks.dingtalk = { status: 'ok', message: `钉钉已配置 ${enabledAccounts.length} 个账号` };
+        } else {
+          health.checks.dingtalk = { status: 'warning', message: '钉钉已启用但无有效账号' };
+        }
+      } else {
+        health.checks.dingtalk = { status: 'ok', message: '钉钉未启用' };
+      }
+    } catch (e: any) {
+      health.checks.dingtalk = { status: 'error', message: e.message };
     }
 
     res.json(health);
@@ -1135,6 +1156,143 @@ export function createAdminServer(options: AdminServerOptions): { start: () => v
       cancelQrLoginSession(sessionId);
     }
     res.json({ ok: true, message: '登录已取消' });
+  });
+
+  // ──────────────────────────────────────────────
+  // WhatsApp 管理 API
+  // ──────────────────────────────────────────────
+
+  // ── GET /api/whatsapp/status（获取连接状态和二维码）
+  api.get('/whatsapp/status', async (_req, res) => {
+    try {
+      // 从状态文件读取（跨进程通信）
+      const { readStatusFile } = await import('../platform/adapters/whatsapp-adapter.js');
+      const status = readStatusFile();
+      if (status) {
+        res.json({ ok: true, ...status });
+      } else {
+        // 状态文件不存在，返回默认状态
+        const settings = configStore.get();
+        res.json({
+          ok: true,
+          enabled: settings.WHATSAPP_ENABLED === 'true',
+          mode: (settings.WHATSAPP_MODE || 'personal') as 'personal' | 'business',
+          status: 'disconnected',
+        });
+      }
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      console.error('[Admin] 获取 WhatsApp 状态失败:', message);
+      res.status(500).json({ error: '获取状态失败: ' + message });
+    }
+  });
+
+  // ──────────────────────────────────────────────
+  // 钉钉管理 API
+  // ──────────────────────────────────────────────
+
+  // ── GET /api/dingtalk/accounts（列出所有钉钉账号）
+  api.get('/dingtalk/accounts', (_req, res) => {
+    const accounts = configStore.getDingtalkAccounts();
+    const mapped = accounts.map(acc => ({
+      id: acc.account_id,
+      accountId: acc.account_id,
+      clientId: acc.client_id,
+      clientSecret: '••••••••', // 脱敏
+      name: acc.name || acc.account_id,
+      enabled: acc.enabled === 1,
+      endpoint: acc.endpoint,
+      createdAt: acc.created_at,
+    }));
+    res.json({ accounts: mapped });
+  });
+
+  // ── POST /api/dingtalk/accounts（创建钉钉账号）
+  api.post('/dingtalk/accounts', (req, res) => {
+    const { accountId, clientId, clientSecret, name, endpoint } = req.body;
+
+    if (!accountId || !clientId || !clientSecret) {
+      res.status(400).json({ error: '缺少必填字段: accountId, clientId, clientSecret' });
+      return;
+    }
+
+    configStore.upsertDingtalkAccount({
+      accountId,
+      clientId,
+      clientSecret,
+      name,
+      enabled: true,
+      endpoint,
+    });
+
+    res.json({ ok: true, message: '账号创建成功' });
+  });
+
+  // ── PUT /api/dingtalk/accounts/:id（更新钉钉账号）
+  api.put('/dingtalk/accounts/:id', (req, res) => {
+    const accountId = req.params.id;
+    const { clientId, clientSecret, name, endpoint } = req.body;
+
+    const existing = configStore.getDingtalkAccount(accountId);
+    if (!existing) {
+      res.status(404).json({ error: '账号不存在' });
+      return;
+    }
+
+    configStore.upsertDingtalkAccount({
+      accountId,
+      clientId: clientId || existing.client_id,
+      clientSecret: clientSecret && clientSecret !== '••••••••' ? clientSecret : existing.client_secret,
+      name: name !== undefined ? name : existing.name,
+      enabled: existing.enabled === 1,
+      endpoint: endpoint || existing.endpoint,
+    });
+
+    res.json({ ok: true, message: '账号更新成功' });
+  });
+
+  // ── DELETE /api/dingtalk/accounts/:id（删除账号）
+  api.delete('/dingtalk/accounts/:id', (req, res) => {
+    const accountId = req.params.id;
+    const success = configStore.deleteDingtalkAccount(accountId);
+    if (success) {
+      res.json({ ok: true, message: `账号 ${accountId} 已删除` });
+    } else {
+      res.status(404).json({ error: '账号不存在' });
+    }
+  });
+
+  // ── POST /api/dingtalk/accounts/:id/toggle（启用/禁用账号）
+  api.post('/dingtalk/accounts/:id/toggle', async (req, res) => {
+    const accountId = req.params.id;
+    const { enabled } = req.body;
+
+    if (typeof enabled !== 'boolean') {
+      res.status(400).json({ error: 'enabled 必须是布尔值' });
+      return;
+    }
+
+    const account = configStore.getDingtalkAccount(accountId);
+    if (!account) {
+      res.status(404).json({ error: '账号不存在' });
+      return;
+    }
+
+    configStore.setDingtalkAccountEnabled(accountId, enabled);
+
+    // 启用/禁用时控制连接
+    try {
+      const { dingtalkAdapter } = await import('../platform/adapters/dingtalk/index.js');
+      if (enabled) {
+        dingtalkAdapter.restartAccount(accountId);
+      } else {
+        dingtalkAdapter.stopAccount(accountId);
+      }
+    } catch (err) {
+      console.error('[Admin] 控制钉钉连接失败:', err);
+    }
+
+    res.json({ ok: true, accountId, enabled, message: `账号已${enabled ? '启用' : '禁用'}` });
   });
 
   app.use('/api', api);

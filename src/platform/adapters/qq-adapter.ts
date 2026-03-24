@@ -151,6 +151,7 @@ type QQGatewayResponse = {
 
 type QQDispatchData = {
   id?: string;
+  session_id?: string;
   content?: string;
   timestamp?: string;
   author?: {
@@ -319,23 +320,6 @@ class QQOfficialClient {
     // DISPATCH - 事件推送
     if (msg.op === OpCode.DISPATCH && msg.t) {
       await this.handleDispatch(msg.t, msg.d as QQDispatchData, onMessage);
-      return;
-    }
-
-    // READY - 鉴权成功
-    if (msg.t === 'READY' && msg.d) {
-      const d = msg.d as { session_id?: string };
-      this.sessionId = d.session_id || null;
-      console.log('[QQ Official] 鉴权成功，session_id:', this.sessionId);
-      this.sendHeartbeat();
-      return;
-    }
-
-    // RESUMED - 重连成功
-    if (msg.t === 'RESUMED') {
-      console.log('[QQ Official] 重连成功');
-      this.isReconnect = false;
-      return;
     }
   }
 
@@ -432,6 +416,21 @@ class QQOfficialClient {
     data: QQDispatchData,
     onMessage: (chatId: string, text: string, messageId: string, senderId: string, attachments?: PlatformAttachment[]) => Promise<void>,
   ): Promise<void> {
+    // READY - 鉴权成功
+    if (eventType === 'READY') {
+      this.sessionId = data.session_id || null;
+      console.log('[QQ Official] 鉴权成功，session_id:', this.sessionId);
+      this.sendHeartbeat();
+      return;
+    }
+
+    // RESUMED - 重连成功
+    if (eventType === 'RESUMED') {
+      console.log('[QQ Official] 重连成功');
+      this.isReconnect = false;
+      return;
+    }
+
     // 群聊 @ 消息
     if (eventType === 'AT_MESSAGE_CREATE' || eventType === 'GROUP_AT_MESSAGE_CREATE') {
       const chatId = `group_${data.group_id || data.channel_id || ''}`;
