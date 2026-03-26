@@ -10,6 +10,7 @@ import { commandHandler } from './command.js';
 import { modelConfig, attachmentConfig } from '../config.js';
 import { DirectoryPolicy } from '../utils/directory-policy.js';
 import { buildSessionTimestamp } from '../utils/session-title.js';
+import { buildStreamCard } from '../feishu/cards-stream.js';
 
 import { randomUUID } from 'crypto';
 import path from 'path';
@@ -130,6 +131,27 @@ export class GroupHandler {
 
     if (!outputBuffer.get(key)) {
       outputBuffer.getOrCreate(key, chatId, sessionId, replyMessageId);
+    }
+  }
+
+  private async ensureThinkingPlaceholder(chatId: string, bufferKey: string): Promise<void> {
+    const current = outputBuffer.get(bufferKey);
+    if (!current || current.messageId) {
+      return;
+    }
+
+    try {
+      const messageId = await feishuClient.sendCard(chatId, buildStreamCard({
+        thinking: '',
+        text: '🤔 思考中...',
+        tools: [],
+        status: 'processing',
+      }));
+      if (messageId) {
+        outputBuffer.setMessageId(bufferKey, messageId);
+      }
+    } catch (error) {
+      console.warn('[Group] 发送思考中占位卡片失败:', error);
     }
   }
 
@@ -354,6 +376,7 @@ export class GroupHandler {
   ): Promise<void> {
     const bufferKey = `chat:${chatId}`;
     this.ensureStreamingBuffer(chatId, sessionId, messageId);
+    await this.ensureThinkingPlaceholder(chatId, bufferKey);
 
     try {
       console.log(`[Group] 发送消息: chat=${chatId}, session=${sessionId.slice(0, 8)}...`);

@@ -28,14 +28,14 @@ cd opencode-bridge
 
 # 执行部署脚本
 chmod +x ./scripts/deploy.sh
-./scripts/deploy.sh guide
+./scripts/deploy.sh
 ```
 
 **Windows PowerShell:**
 
 ```powershell
 # 执行部署脚本
-.\scripts\deploy.ps1 guide
+.\scripts\deploy.ps1
 ```
 
 部署脚本会自动完成：

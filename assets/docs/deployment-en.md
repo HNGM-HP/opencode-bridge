@@ -37,14 +37,10 @@ npm run manage:bridge
 | Command | Description |
 |---------|-------------|
 | `node scripts/deploy.mjs deploy` | Clean install, dependencies, build |
-| `node scripts/deploy.mjs upgrade` | Cleanup, pull latest, redeploy |
-| `node scripts/deploy.mjs opencode-install` | Install OpenCode globally |
-| `node scripts/deploy.mjs opencode-check` | Verify OpenCode installation |
-| `node scripts/deploy.mjs opencode-start` | Start OpenCode in foreground |
-| `node scripts/deploy.mjs guide` | First-time setup wizard |
-| `npm run manage:bridge` | Interactive management menu |
-| `npm run start` | Start bridge (background, auto-detect/build) |
-| `node scripts/stop.mjs` | Stop background process |
+| `node scripts/deploy.mjs start` | Start bridge (background) |
+| `node scripts/deploy.mjs stop` | Stop background process |
+| `node scripts/deploy.mjs reset-password` | Reset admin password |
+| `node scripts/deploy.mjs menu` | Interactive management menu (default) |
 
 ---
 

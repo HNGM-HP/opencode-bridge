@@ -282,6 +282,40 @@ async function ensureNpm(options = {}) {
   throw new Error('未检测到 npm，请安装完成后重新执行部署脚本');
 }
 
+function getPnpmVersion() {
+  try {
+    const result = run('pnpm', ['--version'], '', { capture: true, allowFailure: true });
+    const version = (result.stdout || '').trim();
+    return version || null;
+  } catch {
+    return null;
+  }
+}
+
+async function ensurePnpm() {
+  const pnpmVersion = getPnpmVersion();
+  if (pnpmVersion) {
+    console.log(`[deploy] pnpm 已就绪: ${pnpmVersion}`);
+    return;
+  }
+
+  console.log('[deploy] 未检测到 pnpm，正在通过 npm 全局安装...');
+
+  try {
+    run('npm', ['install', '-g', 'pnpm'], '安装 pnpm');
+    const newVersion = getPnpmVersion();
+    if (newVersion) {
+      console.log(`[deploy] pnpm 已安装: ${newVersion}`);
+      return;
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`[deploy] pnpm 安装失败: ${message}`);
+  }
+
+  throw new Error('pnpm 安装失败，请手动执行 `npm install -g pnpm` 后重试');
+}
+
 async function ensureRuntimeReady() {
   if (runtimeReady) {
     return;
@@ -824,6 +858,7 @@ async function deployProject(options = {}) {
     }
   }
 
+  await ensurePnpm();
   run('npm', ['run', 'build:web'], '编译前端控制台');
   run('npm', ['run', 'build'], '编译后端服务');
   syncBridgeAgents();
@@ -1122,7 +1157,30 @@ function buildServiceContent() {
 
 async function installSystemdService() {
   requireRootForSystemd();
-  await deployProject();
+
+  // 如果是 sudo 环境，先以普通用户身份执行部署，避免文件权限问题
+  const sudoUser = process.env.SUDO_USER;
+  if (sudoUser && typeof process.getuid === 'function' && process.getuid() === 0) {
+    console.log(`[deploy] 检测到 sudo 环境，将以 ${sudoUser} 身份执行部署...`);
+    const sudoUserHome = resolveHomeDirForUser(sudoUser);
+
+    // 以普通用户身份执行部署
+    const deployResult = spawnSync('sudo', ['-u', sudoUser, 'node', path.join(scriptDir, 'deploy.mjs'), 'deploy'], {
+      cwd: rootDir,
+      stdio: 'inherit',
+      env: {
+        ...process.env,
+        HOME: sudoUserHome,
+        BRIDGE_SKIP_SUDO_WARNING: '1',
+      },
+    });
+
+    if (deployResult.error || (typeof deployResult.status === 'number' && deployResult.status !== 0)) {
+      throw new Error('以普通用户身份部署失败，请检查错误信息');
+    }
+  } else {
+    await deployProject();
+  }
 
   fs.writeFileSync(serviceFilePath, buildServiceContent(), 'utf-8');
   run('systemctl', ['daemon-reload'], '刷新 systemd 配置');
