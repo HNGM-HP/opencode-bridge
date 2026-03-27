@@ -3,6 +3,8 @@ node_modules/
 
 # 构建产物
 dist/
+dist-electron/
+release/
 
 # 环境变量和敏感配置
 .env
