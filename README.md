@@ -92,14 +92,31 @@
 
 ## 🚀 快速开始
 
-### 1. 克隆项目
+### 桌面应用（推荐）
+
+Windows 和 macOS 用户可直接下载安装包：
+
+| 平台 | 下载地址 |
+|------|----------|
+| Windows | [GitHub Releases](https://github.com/HNGM-HP/opencode-bridge/releases) 下载 `.exe` 安装包 |
+| macOS | [GitHub Releases](https://github.com/HNGM-HP/opencode-bridge/releases) 下载 `.dmg` 安装包 |
+
+**安装说明：**
+- **Windows**: 双击 `.exe` 安装包，按向导完成安装。如遇"未识别应用"提示，选择"仍要运行"
+- **macOS**: 双击 `.dmg` 打开，拖拽应用到 Applications。首次启动需右键点击应用，选择"打开"
+
+安装完成后启动应用，访问 `http://localhost:4098` 配置平台。
+
+### 源码部署（Linux / 开发者）
+
+#### 1. 克隆项目
 
 ```bash
 git clone https://github.com/HNGM-HP/opencode-bridge.git
 cd opencode-bridge
 ```
 
-### 2. 一键部署
+#### 2. 一键部署
 
 **Linux/macOS:**
 ```bash
@@ -118,7 +135,7 @@ chmod +x ./scripts/deploy.sh
 - 安装项目依赖并编译
 - 生成初始配置文件
 
-### 3. 启动服务
+#### 3. 启动服务
 
 **Linux/macOS:**
 ```bash
@@ -135,7 +152,7 @@ chmod +x ./scripts/deploy.sh
 npm run dev
 ```
 
-### 4. 配置平台
+#### 4. 配置平台
 
 服务启动后，访问 Web 配置面板完成平台配置：
 

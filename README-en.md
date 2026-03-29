@@ -74,14 +74,31 @@
 
 ## 🚀 Quick Start
 
-### 1. Clone Repository
+### Desktop App (Recommended)
+
+Windows and macOS users can download installers directly:
+
+| Platform | Download |
+|----------|----------|
+| Windows | Download `.exe` installer from [GitHub Releases](https://github.com/HNGM-HP/opencode-bridge/releases) |
+| macOS | Download `.dmg` installer from [GitHub Releases](https://github.com/HNGM-HP/opencode-bridge/releases) |
+
+**Installation Notes:**
+- **Windows**: Double-click `.exe` installer and follow the wizard. If you see "unrecognized app" warning, select "Run anyway"
+- **macOS**: Double-click `.dmg` to open, drag the app to Applications. First launch requires right-click and select "Open"
+
+After installation, start the app and access `http://localhost:4098` to configure platforms.
+
+### Source Deployment (Linux / Developers)
+
+#### 1. Clone Repository
 
 ```bash
 git clone https://github.com/HNGM-HP/opencode-bridge.git
 cd opencode-bridge
 ```
 
-### 2. One-Click Deployment
+#### 2. One-Click Deployment
 
 **Linux/macOS:**
 ```bash
@@ -100,7 +117,7 @@ This command will automatically:
 - Install project dependencies and compile
 - Generate initial configuration file
 
-### 3. Start Service
+#### 3. Start Service
 
 **Linux/macOS:**
 ```bash
@@ -117,7 +134,7 @@ This command will automatically:
 npm run dev
 ```
 
-### 4. Configure Platform
+#### 4. Configure Platform
 
 After service starts, access the Web configuration panel:
 
