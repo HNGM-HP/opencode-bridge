@@ -13,8 +13,7 @@ import path from 'node:path';
 import { spawn, ChildProcess } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import http from 'node:http';
-import electronUpdater from 'electron-updater';
-const { autoUpdater } = electronUpdater;
+import https from 'node:https';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -235,13 +234,6 @@ function createTray() {
         mainWindow?.focus();
       },
     },
-    {
-      label: '打开管理面板',
-      click: () => {
-        mainWindow?.show();
-        mainWindow?.focus();
-      },
-    },
     { type: 'separator' },
     {
       label: '重启服务',
@@ -277,51 +269,147 @@ function createTray() {
 }
 
 /**
- * 检查更新
+ * 检查更新（通过 GitHub Releases API）
  */
-function checkForUpdates() {
+async function checkForUpdates() {
   if (isDev) {
     console.log('[Electron] Skipping update check in development mode');
     return;
   }
 
-  autoUpdater.autoDownload = false;
-  autoUpdater.autoInstallOnAppQuit = true;
+  const GITHUB_REPO = 'HNGM-HP/opencode-bridge';
+  const currentVersion = app.getVersion();
 
-  autoUpdater.on('update-available', (info) => {
-    dialog.showMessageBox(mainWindow!, {
+  try {
+    // 获取 GitHub 最新 Release
+    const latestRelease = await fetchGitHubRelease(GITHUB_REPO);
+    if (!latestRelease) {
+      console.log('[Electron] No release found');
+      return;
+    }
+
+    const latestVersion = latestRelease.tag_name.replace(/^v/, '');
+    console.log(`[Electron] Current: ${currentVersion}, Latest: ${latestVersion}`);
+
+    // 比较版本
+    if (compareVersions(latestVersion, currentVersion) <= 0) {
+      console.log('[Electron] Already up to date');
+      return;
+    }
+
+    // 找到对应平台的下载文件
+    const downloadUrl = getPlatformDownloadUrl(latestRelease, latestVersion);
+    if (!downloadUrl) {
+      console.error('[Electron] No suitable download found for platform');
+      return;
+    }
+
+    // 提示用户下载
+    const result = await dialog.showMessageBox(mainWindow!, {
       type: 'info',
       title: '发现新版本',
-      message: `发现新版本 ${info.version}，是否立即下载？`,
-      buttons: ['下载', '稍后提醒'],
+      message: `发现新版本 ${latestVersion}（当前 ${currentVersion}），是否前往下载？`,
+      buttons: ['前往下载', '稍后提醒'],
       defaultId: 0,
-    }).then((result) => {
-      if (result.response === 0) {
-        autoUpdater.downloadUpdate();
-      }
     });
-  });
 
-  autoUpdater.on('update-downloaded', (info) => {
-    dialog.showMessageBox(mainWindow!, {
-      type: 'info',
-      title: '更新已下载',
-      message: `版本 ${info.version} 已下载完成，是否立即安装？`,
-      buttons: ['立即安装', '稍后安装'],
-      defaultId: 0,
-    }).then((result) => {
-      if (result.response === 0) {
-        autoUpdater.quitAndInstall();
-      }
-    });
-  });
+    if (result.response === 0) {
+      shell.openExternal(downloadUrl);
+    }
+  } catch (error) {
+    console.error('[Electron] Update check failed:', error);
+  }
+}
 
-  autoUpdater.on('error', (error) => {
-    console.error('[Electron] Update error:', error);
+/**
+ * 获取 GitHub 最新 Release 信息
+ */
+function fetchGitHubRelease(repo: string): Promise<any> {
+  return new Promise((resolve, reject) => {
+    const url = `https://api.github.com/repos/${repo}/releases/latest`;
+    https.get(url, {
+      headers: { 'User-Agent': 'OpenCode-Bridge-Updater' },
+    }, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        try {
+          resolve(JSON.parse(data));
+        } catch (e) {
+          reject(e);
+        }
+      });
+    }).on('error', reject);
   });
+}
 
-  // 启动时检查更新
-  autoUpdater.checkForUpdates();
+/**
+ * 获取对应平台的下载 URL
+ */
+function getPlatformDownloadUrl(release: any, version: string): string | null {
+  const platform = process.platform;
+  const arch = process.arch;
+
+  // 根据平台确定文件名模式
+  let patterns: string[] = [];
+  if (platform === 'win32') {
+    patterns = [`OpenCode.Bridge.Setup-${version}.exe`];
+  } else if (platform === 'darwin') {
+    // macOS: arm64 或 x64
+    if (arch === 'arm64') {
+      patterns = [`OpenCode.Bridge-${version}-arm64.dmg`, `OpenCode.Bridge-${version}.dmg`];
+    } else {
+      patterns = [`OpenCode.Bridge-${version}-x64.dmg`, `OpenCode.Bridge-${version}.dmg`];
+    }
+  } else if (platform === 'linux') {
+    patterns = [`OpenCode.Bridge-${version}.AppImage`];
+  }
+
+  // 从 release assets 中查找
+  for (const pattern of patterns) {
+    const asset = release.assets?.find((a: any) => a.name === pattern);
+    if (asset) {
+      return asset.browser_download_url;
+    }
+  }
+
+  // 如果找不到精确匹配，尝试模糊匹配
+  const fallbackPatterns: Record<string, RegExp[]> = {
+    win32: [/OpenCode\.Bridge\.Setup.*\.exe$/],
+    darwin: [/OpenCode\.Bridge.*\.dmg$/],
+    linux: [/OpenCode\.Bridge.*\.AppImage$/],
+  };
+
+  for (const pattern of fallbackPatterns[platform] || []) {
+    const asset = release.assets?.find((a: any) => pattern.test(a.name));
+    if (asset) {
+      return asset.browser_download_url;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * 版本号比较（返回: 1 表示 a > b, -1 表示 a < b, 0 表示相等）
+ */
+function compareVersions(a: string, b: string): number {
+  const parseVersion = (v: string) => {
+    // 移除 beta/alpha 后缀，只比较数字部分
+    const parts = v.split('-')[0].split('.');
+    return parts.map(p => parseInt(p, 10) || 0);
+  };
+
+  const aParts = parseVersion(a);
+  const bParts = parseVersion(b);
+
+  for (let i = 0; i < Math.max(aParts.length, bParts.length); i++) {
+    const aVal = aParts[i] || 0;
+    const bVal = bParts[i] || 0;
+    if (aVal > bVal) return 1;
+    if (aVal < bVal) return -1;
+  }
+  return 0;
 }
 
 // 单实例锁：防止多开

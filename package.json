@@ -1,6 +1,6 @@
 {
   "name": "opencode-bridge",
-  "version": "2.9.53-beta.14",
+  "version": "2.9.53",
   "type": "module",
   "description": "Feishu / Discord × OpenCode bridge service with runtime cron and reliability tooling",
   "main": "dist-electron/main.js",
@@ -74,8 +74,7 @@
     "dingtalk-stream": "^2.1.4",
     "discord.js": "^14.25.1",
     "dotenv": "^16.4.5",
-    "electron-updater": "^6.3.9",
-    "express": "^5.2.1",
+        "express": "^5.2.1",
     "grammy": "^1.41.1",
     "node-cron": "^4.2.1",
     "qrcode": "^1.5.4"
