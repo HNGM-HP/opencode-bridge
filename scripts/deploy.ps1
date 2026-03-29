@@ -60,11 +60,12 @@ function Get-NodeMajor {
 
 function Get-NpmVersion {
   try {
-    $version = (& npm -v 2>$null)
-    if ([string]::IsNullOrWhiteSpace($version)) {
+    $output = (& npm -v 2>$null)
+    if ([string]::IsNullOrWhiteSpace($output)) {
       return $null
     }
-    return $version.Trim()
+    $lines = $output.Trim() -split "`n"
+    return $lines[-1].Trim()
   } catch {
     return $null
   }
