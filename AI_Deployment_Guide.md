@@ -4,7 +4,7 @@
 
 ## 1. 事实基线（来自仓库）
 
-- Node.js 要求：`>= 18`（见 `package.json`）。
+- Node.js 要求：`>= 20`（见 `package.json`）。
 - 桥接服务默认入口：`dist/index.js`。
 - 可用部署脚本（跨平台）：
   - `scripts/deploy.mjs`（菜单 + deploy/start/stop + Linux systemd）
@@ -29,7 +29,7 @@ node -v
 npm -v
 ```
 
-要求 Node 主版本 >= 18。
+要求 Node 主版本 >= 20。
 
 ### 步骤 B：准备配置
 

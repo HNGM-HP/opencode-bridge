@@ -1,6 +1,6 @@
 # Deployment and Operations
 
-**Version**: v2.9.53
+**Version**: v2.9.55
 **Last Updated**: 2026-03-23
 
 ---
@@ -9,7 +9,7 @@
 
 | Component | Requirement | Notes |
 |-----------|-------------|-------|
-| **Node.js** | >= 18.0.0 | Required for running the bridge |
+| **Node.js** | >= 20.0.0 | Required for running the bridge |
 | **pnpm** | >= 8.0.0 | Package manager (recommended) |
 | **OS** | Linux / macOS / Windows | All platforms supported |
 | **OpenCode** | Installed and running | AI assistant backend |

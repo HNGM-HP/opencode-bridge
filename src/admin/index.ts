@@ -11,6 +11,7 @@
 // 首先加载配置（包含 dotenv 初始化）
 import '../config.js';
 
+import pkg from '../../package.json' with { type: 'json' };
 import { createAdminServer } from './admin-server.js';
 import { bridgeManager, type BridgeStatus } from './bridge-manager.js';
 import { configStore } from '../store/config-store.js';
@@ -18,7 +19,7 @@ import { initLogger } from '../utils/logger.js';
 import { logStore } from '../store/log-store.js';
 
 const ADMIN_PORT = parseInt(process.env.ADMIN_PORT ?? '4098', 10);
-const VERSION = '2.9.52';
+const VERSION = pkg.version;
 
 async function main() {
   // 初始化日志收集器

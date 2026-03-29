@@ -1,6 +1,6 @@
 # QQ Configuration Guide
 
-**Version**: v2.9.53
+**Version**: v2.9.55
 **Last Updated**: 2026-03-23
 
 ---

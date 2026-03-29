@@ -1,7 +1,7 @@
 # OpenCode Bridge
 
-[![v2.9.53](https://img.shields.io/badge/v2.9.53-3178C6)]()
-[![Node.js >= 18](https://img.shields.io/badge/Node.js-%3E%3D18-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
+[![v2.9.55](https://img.shields.io/badge/v2.9.55-3178C6)]()
+[![Node.js >= 20](https://img.shields.io/badge/Node.js-%3E%3D20-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![License: GPLv3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 
@@ -322,7 +322,7 @@ flowchart LR
 
 ## 📋 环境要求
 
-- **Node.js**: >= 18.0.0
+- **Node.js**: >= 20.0.0
 - **操作系统**: Linux / macOS / Windows
 - **OpenCode**: 需要安装并运行
 

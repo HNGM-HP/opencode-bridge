@@ -1,6 +1,6 @@
 {
   "name": "opencode-bridge",
-  "version": "2.9.53",
+  "version": "2.9.55",
   "type": "module",
   "description": "Feishu / Discord × OpenCode bridge service with runtime cron and reliability tooling",
   "main": "dist-electron/main.js",
@@ -101,7 +101,7 @@
     "ws": "^8.20.0"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=20.0.0"
   },
   "build": {
     "appId": "com.github.hngm-hp.opencode-bridge",

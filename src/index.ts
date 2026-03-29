@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import pkg from '../package.json' with { type: 'json' };
 import { initLogger } from './utils/logger.js';
 import { logStore } from './store/log-store.js';
 import { createAdminServer } from './admin/admin-server.js';
@@ -537,7 +538,7 @@ async function main() {
   initLogger(logStore);
 
   console.log('╔════════════════════════════════════════════════╗');
-  console.log('║   飞书 × OpenCode 桥接服务 v2.9.52     ║');
+  console.log('║   飞书 × OpenCode 桥接服务 v' + pkg.version + '     ║');
   console.log('╚════════════════════════════════════════════════╝');
 
   // 1. 如果启用了 OpenCode 自动启动，先清理旧进程并启动
@@ -629,7 +630,7 @@ async function main() {
       password: adminPassword,
       cronManager: undefined, // cronManager 在后面初始化
       startedAt: new Date(),
-      version: '2.9.5-beta',
+      version: pkg.version,
     });
     adminServer.start();
     console.log(`[Admin] 管理面板已启动: http://localhost:${adminPort}`);
