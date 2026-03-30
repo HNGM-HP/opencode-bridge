@@ -96,19 +96,8 @@ function stopBackend() {
     console.log('[Electron] Stopping backend...');
     backendProcess.kill('SIGTERM');
     backendProcess = null;
-    // 显示服务已停止的提示页面
-    mainWindow?.loadURL(`data:text/html,
-      <html>
-        <head><meta charset="UTF-8"><title>服务已停止</title></head>
-        <body style="display:flex;justify-content:center;align-items:center;height:100vh;margin:0;font-family:sans-serif;background:#f5f5f5;">
-          <div style="text-align:center;padding:40px;background:white;border-radius:8px;box-shadow:0 2px 10px rgba(0,0,0,0.1);">
-            <h2 style="color:#e74c3c;margin-bottom:16px;">⚠️ 服务已停止</h2>
-            <p style="color:#666;margin-bottom:20px;">后端服务已被手动停止，请通过托盘菜单重启服务。</p>
-            <button onclick="location.reload()" style="padding:10px 20px;background:#3498db;color:white;border:none;border-radius:4px;cursor:pointer;">重试</button>
-          </div>
-        </body>
-      </html>
-    `);
+    // 隐藏窗口
+    mainWindow?.hide();
   }
 }
 
@@ -249,6 +238,12 @@ function createTray() {
     },
     { type: 'separator' },
     {
+      label: '启动服务',
+      click: () => {
+        startBackend();
+      },
+    },
+    {
       label: '停止服务',
       click: () => {
         stopBackend();
@@ -271,7 +266,7 @@ function createTray() {
     {
       label: '重置管理密码',
       click: async () => {
-        const result = await dialog.showMessageBox(mainWindow!, {
+        const result = await dialog.showMessageBox(null, {
           type: 'warning',
           title: '重置管理密码',
           message: '确定要重置管理密码吗？',
@@ -284,7 +279,6 @@ function createTray() {
         if (result.response === 0) {
           // 通过 HTTP API 重置密码
           try {
-            const http = require('http');
             const req = http.request({
               hostname: 'localhost',
               port: ADMIN_PORT,
@@ -293,38 +287,45 @@ function createTray() {
               headers: {
                 'Content-Type': 'application/json',
               },
-            }, (res: any) => {
-              if (res.statusCode === 200) {
-                dialog.showMessageBox(mainWindow!, {
-                  type: 'info',
-                  title: '密码已重置',
-                  message: '管理密码已重置，请重新打开窗口设置新密码。',
-                  buttons: ['确定'],
-                });
-                mainWindow?.loadURL(`http://localhost:${ADMIN_PORT}`);
-              } else {
-                dialog.showMessageBox(mainWindow!, {
-                  type: 'error',
-                  title: '重置失败',
-                  message: '密码重置失败，请检查服务是否运行。',
-                  buttons: ['确定'],
-                });
-              }
+            }, (res) => {
+              let data = '';
+              res.on('data', chunk => data += chunk);
+              res.on('end', () => {
+                if (res.statusCode === 200) {
+                  dialog.showMessageBox(null, {
+                    type: 'info',
+                    title: '密码已重置',
+                    message: '管理密码已重置，请重新打开窗口设置新密码。',
+                    buttons: ['确定'],
+                  }).then(() => {
+                    mainWindow?.show();
+                    mainWindow?.loadURL(`http://localhost:${ADMIN_PORT}`);
+                  });
+                } else {
+                  dialog.showMessageBox(null, {
+                    type: 'error',
+                    title: '重置失败',
+                    message: `密码重置失败: ${data || '请检查服务是否运行。'}`,
+                    buttons: ['确定'],
+                  });
+                }
+              });
             });
-            req.on('error', () => {
-              dialog.showMessageBox(mainWindow!, {
+            req.on('error', (err) => {
+              dialog.showMessageBox(null, {
                 type: 'error',
                 title: '重置失败',
-                message: '无法连接到服务，请先重启服务后重试。',
+                message: `无法连接到服务: ${err.message}`,
                 buttons: ['确定'],
               });
             });
             req.end();
-          } catch {
-            dialog.showMessageBox(mainWindow!, {
+          } catch (err) {
+            const errorMsg = err instanceof Error ? err.message : '密码重置操作失败。';
+            dialog.showMessageBox(null, {
               type: 'error',
               title: '重置失败',
-              message: '密码重置操作失败。',
+              message: errorMsg,
               buttons: ['确定'],
             });
           }
