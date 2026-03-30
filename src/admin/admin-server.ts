@@ -149,13 +149,8 @@ export function createAdminServer(options: AdminServerOptions): { start: () => v
     const hasToken = authHeader.startsWith('Bearer ');
     const token = hasToken ? authHeader.slice(7) : '';
 
-    // 密码已被重置为空，但请求携带旧token → 返回410提示前端清除缓存
-    if (!currentPassword && hasToken && token.length > 0) {
-      res.status(410).json({ error: 'Password reset', reason: 'password_reset' });
-      return;
-    }
-
-    // 密码为空且无token → 允许通过（首次设置场景）
+    // 密码为空 → 允许通过（首次设置场景）
+    // 前端会通过 /api/admin/password-status 检测密码状态并跳转到设置页面
     if (!currentPassword) {
       next();
       return;
