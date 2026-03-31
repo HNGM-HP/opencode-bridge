@@ -21,6 +21,7 @@ import express from 'express';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import os from 'node:os';
+import fs from 'node:fs';
 import { spawn, execSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { configStore, type BridgeSettings } from '../store/config-store.js';
@@ -30,6 +31,9 @@ import type { BridgeManager } from './bridge-manager.js';
 import { createSessionRoutes } from './routes/session.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// 开发模式检测（process.resourcesPath 是 Electron 特有属性）
+const isDev = process.env.NODE_ENV === 'development' || !(process as any).resourcesPath;
 
 // ──────────────────────────────────────────────
 // 需要重启才能生效的敏感配置项
@@ -637,7 +641,6 @@ export function createAdminServer(options: AdminServerOptions): { start: () => v
 
       // 写入 server 配置
       const opencodeConfigDir = path.join(os.homedir(), '.config', 'opencode');
-      const fs = await import('node:fs');
       fs.mkdirSync(opencodeConfigDir, { recursive: true });
 
       const configPath = path.join(opencodeConfigDir, 'opencode.json');
@@ -658,16 +661,39 @@ export function createAdminServer(options: AdminServerOptions): { start: () => v
       fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
 
       // 启动 OpenCode
-      // visual: true -> opencode web (可视化启动，打开 Web 界面)
-      // visual: false -> opencode serve (后台启动，headless 模式)
+      // visual: true -> opencode (前台模式，显示 CLI 窗口 + web)
+      // visual: false -> opencode serve (后台模式，headless)
       const isWindows = process.platform === 'win32';
-      const startCommand = visual ? 'web' : 'serve';
-      spawn('opencode', [startCommand], {
-        detached: true,
-        stdio: 'ignore',
-        shell: isWindows,
-        windowsHide: isWindows,
-      });
+
+      if (isWindows) {
+        if (visual) {
+          // 前台模式：直接启动 opencode，显示 CLI 窗口
+          spawn('opencode', [], {
+            detached: true,
+            stdio: 'ignore',
+            shell: true,
+          });
+        } else {
+          // 后台模式：使用 VBS 静默启动，不显示窗口
+          const vbsContent = `
+Set objShell = CreateObject("WScript.Shell")
+objShell.Run "cmd /c opencode serve", 0, False
+`.trim();
+          const vbsPath = path.join(os.tmpdir(), 'opencode-start.vbs');
+          fs.writeFileSync(vbsPath, vbsContent, 'utf-8');
+          spawn('wscript', [vbsPath], {
+            detached: true,
+            stdio: 'ignore',
+            windowsHide: true,
+          });
+        }
+      } else {
+        const args = visual ? [] : ['serve'];
+        spawn('opencode', args, {
+          detached: true,
+          stdio: 'ignore',
+        });
+      }
 
       res.json({ ok: true, message: visual ? 'OpenCode 已启动（可视化模式）' : 'OpenCode 已启动（后台模式）' });
     } catch (error: any) {
@@ -682,14 +708,32 @@ export function createAdminServer(options: AdminServerOptions): { start: () => v
     // 异步终止 OpenCode 进程
     setTimeout(() => {
       try {
-        execSync('node ' + path.join(process.cwd(), 'scripts', 'process-manager.mjs') + ' kill-opencode', {
+        // 获取脚本路径（兼容开发环境和 Electron 打包环境）
+        let scriptPath: string;
+        if ((process as any).resourcesPath && !isDev) {
+          // Electron 打包后：scripts 在 resources/app/scripts/
+          scriptPath = path.join((process as any).resourcesPath, 'app', 'scripts', 'process-manager.mjs');
+        } else {
+          // 开发环境或非 Electron 环境
+          scriptPath = path.resolve(__dirname, '../../scripts/process-manager.mjs');
+        }
+        console.log('[Admin] 终止脚本路径:', scriptPath);
+        console.log('[Admin] Node 路径:', process.execPath);
+
+        const result = execSync('"' + process.execPath + '" "' + scriptPath + '" kill-opencode', {
           encoding: 'utf-8',
-          timeout: 10000,
+          timeout: 15000,
           windowsHide: true,
         });
-        console.log('[Admin] OpenCode 进程已终止');
+        console.log('[Admin] OpenCode 终止结果:', result.trim());
       } catch (error: any) {
         console.error('[Admin] OpenCode 终止失败:', error.message);
+        if (error.stdout) {
+          console.error('[Admin] stdout:', error.stdout);
+        }
+        if (error.stderr) {
+          console.error('[Admin] stderr:', error.stderr);
+        }
       }
     }, 100);
   });

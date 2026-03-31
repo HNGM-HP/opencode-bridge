@@ -1,6 +1,6 @@
 {
   "name": "opencode-bridge",
-  "version": "2.9.57",
+  "version": "2.9.58",
   "type": "module",
   "description": "Feishu / Discord × OpenCode bridge service with runtime cron and reliability tooling",
   "main": "dist-electron/main.js",
@@ -33,7 +33,7 @@
     "build:web": "cd web && pnpm install && pnpm run build",
     "build:electron": "tsc -p tsconfig.electron.json",
     "build:all": "npm run build:web && npm run build && npm run build:electron",
-    "rebuild": "electron-rebuild -f -w better-sqlite3",
+    "rebuild": "electron-rebuild -f -w better-sqlite3 -v",
     "pack": "electron-builder --dir",
     "dist": "electron-builder --publish never",
     "dist:win": "electron-builder --win --publish never",
@@ -141,6 +141,13 @@
       {
         "from": "assets",
         "to": "app/assets",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "scripts",
+        "to": "app/scripts",
         "filter": [
           "**/*"
         ]

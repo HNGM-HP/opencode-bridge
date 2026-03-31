@@ -110,16 +110,20 @@ function findOpenCodeProcesses(excludeSelf = false, excludePid = null) {
     if (!result.error && result.status === 0) {
       const lines = result.stdout.split('\r\n').filter(line => line.trim());
       for (const line of lines) {
-        const match = line.match(/"node\.exe","(\d+)"/);
+        // 匹配 node.exe 或 opencode.exe 进程
+        const match = line.match(/"(node\.exe|opencode\.exe)","(\d+)"/);
         if (match) {
-          const pid = parseInt(match[1], 10);
+          const pid = parseInt(match[2], 10);
           if (excludeSelf && pid === currentPid) {
             continue;
           }
           if (excludePid && pid === excludePid) {
             continue;
           }
-          if (isOpenCodeProcessByCommand(pid)) {
+          // opencode.exe 直接就是目标进程
+          if (match[1] === 'opencode.exe') {
+            pids.push(pid);
+          } else if (isOpenCodeProcessByCommand(pid)) {
             pids.push(pid);
           }
         }
