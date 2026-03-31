@@ -36,11 +36,22 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Setup Python for node-gyp
+      - name: Setup Python for node-gyp (Windows)
         if: matrix.platform == 'win'
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+
+      - name: Setup Python for node-gyp (macOS/Linux)
+        if: matrix.platform != 'win'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Xcode tools (macOS)
+        if: matrix.platform == 'mac'
+        run: |
+          xcode-select --print-path || xcode-select --install 2>/dev/null || true
 
       - name: Install pnpm
         run: npm install -g pnpm
@@ -70,7 +81,13 @@ jobs:
         run: pnpm run build:all
 
       - name: Rebuild native modules for Electron
-        run: pnpm run rebuild
+        env:
+          npm_config_python: python3
+        run: |
+          echo "Node version: $(node --version)"
+          echo "npm version: $(npm --version)"
+          echo "Python version: $(python3 --version)"
+          pnpm run rebuild
 
       - name: Build Electron app (Windows)
         if: matrix.platform == 'win'
