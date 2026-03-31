@@ -661,15 +661,14 @@ export function createAdminServer(options: AdminServerOptions): { start: () => v
       fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
 
       // 启动 OpenCode
-      // visual: true -> opencode web (可视化启动，打开 Web 界面，显示窗口)
-      // visual: false -> opencode serve (后台启动，headless 模式，隐藏窗口)
+      // visual: true -> opencode (前台模式，显示 CLI 窗口 + web)
+      // visual: false -> opencode serve (后台模式，headless)
       const isWindows = process.platform === 'win32';
-      const startCommand = visual ? 'web' : 'serve';
 
       if (isWindows) {
         if (visual) {
-          // 前台模式：直接启动，显示 cmd 窗口
-          spawn('opencode', [startCommand], {
+          // 前台模式：直接启动 opencode，显示 CLI 窗口
+          spawn('opencode', [], {
             detached: true,
             stdio: 'ignore',
             shell: true,
@@ -678,7 +677,7 @@ export function createAdminServer(options: AdminServerOptions): { start: () => v
           // 后台模式：使用 VBS 静默启动，不显示窗口
           const vbsContent = `
 Set objShell = CreateObject("WScript.Shell")
-objShell.Run "cmd /c opencode ${startCommand}", 0, False
+objShell.Run "cmd /c opencode serve", 0, False
 `.trim();
           const vbsPath = path.join(os.tmpdir(), 'opencode-start.vbs');
           fs.writeFileSync(vbsPath, vbsContent, 'utf-8');
@@ -689,7 +688,8 @@ objShell.Run "cmd /c opencode ${startCommand}", 0, False
           });
         }
       } else {
-        spawn('opencode', [startCommand], {
+        const args = visual ? [] : ['serve'];
+        spawn('opencode', args, {
           detached: true,
           stdio: 'ignore',
         });
