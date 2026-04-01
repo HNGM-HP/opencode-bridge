@@ -97,23 +97,7 @@ export class DirectoryPolicy {
   }
 
   private static buildAllowlistGuidance(): string {
-    const detected = this.detectAllowlistConfigMode();
-    const adminPort = process.env.ADMIN_PORT?.trim() || '4098';
-    const adminUrl = `http://localhost:${adminPort}`;
-
-    if (detected.mode === 'mixed' && detected.envFile) {
-      return `当前实例已启用 Web 管理面板配置，但 ${detected.envFile} 中也配置了 ALLOWED_DIRECTORIES，运行时会优先使用 .env；请先修改 ${detected.envFile} 中的 ALLOWED_DIRECTORIES，修改后重启服务`;
-    }
-
-    if (detected.mode === 'env' && detected.envFile) {
-      return `当前实例使用 .env 配置，请在 ${detected.envFile} 中设置 ALLOWED_DIRECTORIES，修改后重启服务`;
-    }
-
-    if (detected.mode === 'db') {
-      return `当前实例使用 Web 管理面板 / SQLite 配置，请在 Web 管理面板的“核心行为 -> 工作目录与项目 -> 允许的目录白名单（ALLOWED_DIRECTORIES）”中添加该目录\n管理面板地址：${adminUrl}`;
-    }
-
-    return `请在 Web 管理面板的“核心行为 -> 工作目录与项目 -> 允许的目录白名单（ALLOWED_DIRECTORIES）”中添加该目录；如果仍使用 .env 配置，请修改 ALLOWED_DIRECTORIES 后重启服务\n管理面板地址：${adminUrl}`;
+    return '请在 Web 管理面板的“核心行为 -> 工作目录与项目 -> 允许的目录白名单（ALLOWED_DIRECTORIES）”中添加或修改目录\n管理面板地址：http://localhost:4098';
   }
 
   private static buildAllowlistUserMessage(
