@@ -15,7 +15,6 @@ import { chatSessionStore } from '../store/chat-session.js';
 import { parseCommand, getHelpText, type ParsedCommand } from '../commands/parser.js';
 import { DirectoryPolicy } from '../utils/directory-policy.js';
 import { buildSessionTimestamp } from '../utils/session-title.js';
-import { shouldSkipGroupMessage } from '../utils/group-mention.js';
 import type { PlatformMessageEvent, PlatformSender, PlatformAttachment } from '../platform/types.js';
 import type { EffortLevel } from '../commands/effort.js';
 import { normalizeEffortLevel, KNOWN_EFFORT_LEVELS } from '../commands/effort.js';
@@ -120,7 +119,7 @@ function parsePermissionDecision(raw: string): PermissionDecision | null {
 
 export class TelegramHandler {
   private ensureStreamingBuffer(chatId: string, sessionId: string): void {
-    const key = `chat:${chatId}`;
+    const key = `chat:telegram:${chatId}`;
     const current = outputBuffer.get(key);
     if (current && current.status !== 'running') {
       outputBuffer.clear(key);
@@ -180,10 +179,8 @@ export class TelegramHandler {
     event: PlatformMessageEvent,
     sender: PlatformSender
   ): Promise<void> {
-    // 群聊 @ 提到检查
-    if (shouldSkipGroupMessage(event)) {
-      return;
-    }
+    // 注意：群聊 @ 提到检查已在 telegram-adapter 中处理（通过 botUsername 正则过滤），
+    // 此处不再重复调用 shouldSkipGroupMessage，避免因 mentions 字段未填充导致群消息被误丢弃。
 
     const { conversationId: chatId, content, senderId, attachments } = event;
     const trimmed = content.trim();
@@ -1479,7 +1476,7 @@ export class TelegramHandler {
     promptEffort?: EffortLevel,
     sender?: PlatformSender
   ): Promise<void> {
-    const bufferKey = `chat:${chatId}`;
+    const bufferKey = `chat:telegram:${chatId}`;
     this.ensureStreamingBuffer(chatId, sessionId);
 
     if (!sender) {
