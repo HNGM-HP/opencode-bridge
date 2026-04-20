@@ -1173,7 +1173,7 @@ export class QQHandler {
         });
 
         const buffer = Buffer.from(response.data);
-        const contentType = response.headers['content-type'] || '';
+        const contentType = (response.headers['content-type'] as string) || '';
 
         // 确定文件扩展名
         const extFromName = attachment.fileName ? extractExtension(attachment.fileName) : '';
