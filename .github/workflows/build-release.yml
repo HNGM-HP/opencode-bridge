@@ -85,11 +85,13 @@ jobs:
         run: pnpm run build:all
 
       - name: Rebuild native modules for Electron
+        shell: bash
         run: |
           echo "Node version: $(node --version)"
           echo "npm version: $(npm --version)"
-          PYTHON_BIN=$(which python3 || which python)
-          echo "Python: $PYTHON_BIN — $($PYTHON_BIN --version)"
+          PYTHON_BIN=$(command -v python3 || command -v python)
+          echo "Python: $PYTHON_BIN"
+          "$PYTHON_BIN" --version
           ELECTRON_VERSION=$(node -p "require('./node_modules/electron/package.json').version")
           echo "Rebuilding better-sqlite3 against Electron $ELECTRON_VERSION"
           pnpm exec electron-rebuild -f -w better-sqlite3 --version "$ELECTRON_VERSION" --python "$PYTHON_BIN"
