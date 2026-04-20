@@ -413,11 +413,21 @@ function normalizePath(value?: string): string {
   const normalized = (value || '').trim().replace(/\\/g, '/')
   if (!normalized) return ''
   if (normalized === '/') return normalized
+
+  // Windows drive letter paths: normalize "C:" to "C:/"
+  if (/^[A-Za-z]:$/.test(normalized)) {
+    return `${normalized}/`
+  }
+
   return normalized.replace(/\/+$/, '')
 }
 
 function isAbsolutePath(value: string): boolean {
-  return value.startsWith('/') || /^[A-Za-z]:\//.test(value)
+  // Unix-style absolute paths
+  if (value.startsWith('/')) return true
+
+  // Windows-style absolute paths (both "C:/" and "C:")
+  return /^[A-Za-z]:(?:\/|$)/.test(value)
 }
 
 function buildAbsolutePath(root: string, relativePath: string): string {
@@ -756,7 +766,14 @@ async function loadCreateDirectories(relativePath = ''): Promise<void> {
       limit: 250,
     })
     createBrowserListing.value = listing
-    createPathInput.value = buildAbsolutePath(root, listing.path || relativePath)
+
+    // Update the root to the backend-resolved path (e.g., "/" -> "C:/")
+    const resolvedRoot = normalizePath(listing.directory)
+    if (resolvedRoot && resolvedRoot !== root) {
+      createBrowserRoot.value = resolvedRoot
+    }
+
+    createPathInput.value = buildAbsolutePath(resolvedRoot, listing.path || relativePath)
   } catch (error) {
     createBrowserError.value = error instanceof Error ? error.message : '读取目录失败'
   } finally {
