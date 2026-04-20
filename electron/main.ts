@@ -456,12 +456,11 @@ async function killOldBridgeProcesses(): Promise<number[]> {
   return [];
 }
 
-if (!gotTheLock) {
-  // 检测到另一个实例正在运行
-  console.log('[Electron] Another instance is already running');
-
-  // 弹出对话框提示用户
-  dialog.showMessageBox(null, {
+/**
+ * 处理单实例锁失败的情况（需要在 app ready 之后调用）
+ */
+async function handleSingleInstanceLockFailure() {
+  const result = await dialog.showMessageBox(null, {
     type: 'warning',
     title: '程序已在运行',
     message: 'OpenCode Bridge 已在运行中，请勿重复启动。',
@@ -469,64 +468,72 @@ if (!gotTheLock) {
     buttons: ['强制终止旧进程并启动', '退出'],
     defaultId: 1,
     cancelId: 1,
-  }).then(async (result) => {
-    if (result.response === 0) {
-      // 用户选择强制终止旧进程
-      console.log('[Electron] User chose to kill old process and start');
-
-      // 先释放当前的请求，然后尝试终止旧进程
-      // 注意：此时我们无法真正获取锁，因为旧进程还在运行
-      // 需要先强制终止旧进程
-      await killOldBridgeProcesses();
-
-      // 等待一秒后重新尝试启动
-      setTimeout(() => {
-        // 重新启动当前实例（退出后再启动）
-        app.relaunch();
-        app.exit(0);
-      }, 1000);
-    } else {
-      // 用户选择退出
-      app.exit(0);
-    }
   });
-} else {
+
+  if (result.response === 0) {
+    // 用户选择强制终止旧进程
+    console.log('[Electron] User chose to kill old process and start');
+
+    // 先释放当前的请求，然后尝试终止旧进程
+    // 注意：此时我们无法真正获取锁，因为旧进程还在运行
+    // 需要先强制终止旧进程
+    await killOldBridgeProcesses();
+
+    // 等待一秒后重新尝试启动
+    setTimeout(() => {
+      // 重新启动当前实例（退出后再启动）
+      app.relaunch();
+      app.exit(0);
+    }, 1000);
+  } else {
+    // 用户选择退出
+    app.exit(0);
+  }
+}
+
+// 应用就绪后处理初始化逻辑
+app.whenReady().then(async () => {
+  // 检查单实例锁
+  if (!gotTheLock) {
+    // 检测到另一个实例正在运行，在 app ready 后弹窗提示
+    console.log('[Electron] Another instance is already running');
+    await handleSingleInstanceLockFailure();
+    return;
+  }
+
   app.on('second-instance', () => {
     // 当运行第二个实例时，打开管理面板
     shell.openExternal(`http://localhost:${ADMIN_PORT}`);
   });
 
-  // 应用就绪
-  app.whenReady().then(async () => {
-    // 启动后端服务
-    startBackend();
+  // 启动后端服务
+  startBackend();
 
-    // 等待 Admin Server 就绪
-    console.log('[Electron] Waiting for Admin Server...');
-    const isReady = await waitForAdminServer(ADMIN_PORT);
+  // 等待 Admin Server 就绪
+  console.log('[Electron] Waiting for Admin Server...');
+  const isReady = await waitForAdminServer(ADMIN_PORT);
 
-    if (!isReady) {
-      console.error('[Electron] Admin Server failed to start');
-      // 服务启动失败时弹窗提示
-      dialog.showMessageBox(null, {
-        type: 'error',
-        title: '服务启动失败',
-        message: '管理面板服务未能正常启动，请检查日志。',
-        buttons: ['确定'],
-      });
-    }
+  if (!isReady) {
+    console.error('[Electron] Admin Server failed to start');
+    // 服务启动失败时弹窗提示
+    dialog.showMessageBox(null, {
+      type: 'error',
+      title: '服务启动失败',
+      message: '管理面板服务未能正常启动，请检查日志。',
+      buttons: ['确定'],
+    });
+  }
 
-    // 创建托盘（始终创建，作为主要交互入口）
-    createTray();
+  // 创建托盘（始终创建，作为主要交互入口）
+  createTray();
 
-    // 无论开发模式还是生产模式，启动时都主动打开管理面板
-    console.log('[Electron] Opening admin panel on startup');
-    shell.openExternal(`http://localhost:${ADMIN_PORT}`);
+  // 无论开发模式还是生产模式，启动时都主动打开管理面板
+  console.log('[Electron] Opening admin panel on startup');
+  shell.openExternal(`http://localhost:${ADMIN_PORT}`);
 
-    // 检查更新（非开发模式）
-    checkForUpdates();
-  });
-}
+  // 检查更新（非开发模式）
+  checkForUpdates();
+});
 
 // 应用退出前清理
 app.on('before-quit', () => {

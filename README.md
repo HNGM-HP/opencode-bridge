@@ -189,6 +189,99 @@ Windows 和 macOS 用户可直接在 [GitHub Releases](https://github.com/HNGM-H
 
 ---
 
+## ❓ 常见安装问题
+
+### macOS 提示"已损坏"
+
+**问题现象**：
+```
+"OpenCode Bridge" 已损坏，无法打开。你应该将它移到废纸篓。
+```
+
+**原因说明**：
+- macOS 的安全机制（Gatekeeper）阻止了未签名的应用运行
+- 本项目为开源免费项目，未购买 Apple Developer 证书进行签名
+
+**解决方案**（任选其一）：
+
+#### 方法 1：右键强制打开（推荐）
+```
+1. 右键点击 "OpenCode Bridge.app"
+2. 按住键盘上的 "Option" 键
+3. 双击 "打开" 按钮
+4. 在弹出对话框中点击 "打开" 确认
+```
+
+#### 方法 2：系统设置解除限制
+```
+1. 打开 "系统设置" → "隐私与安全性"
+2. 找到 "OpenCode Bridge 被阻止" 的提示
+3. 点击 "仍要打开"
+```
+
+#### 方法 3：命令行移除隔离属性
+```bash
+# 在终端中执行（需要替换实际路径）
+xattr -cr /Applications/OpenCode\ Bridge.app
+```
+
+**一次性操作后**，以后就可以正常双击启动了。
+
+---
+
+### Windows 提示"未识别的应用"
+
+**问题现象**：
+```
+Windows 已保护你的电脑
+Microsoft Defender SmartScreen 筛选器已阻止无法识别的应用启动
+```
+
+**解决方案**：
+1. 点击 "更多信息"
+2. 点击 "仍要运行"
+
+**原因说明**：这是 Windows Defender 的正常保护机制，对无签名的应用都会提示。确认后即可正常运行。
+
+---
+
+### 应用启动后无法访问管理面板
+
+**排查步骤**：
+
+1. **检查应用是否运行**：
+   - **Windows**：查看系统托盘（右下角）是否有 OpenCode Bridge 图标
+   - **macOS**：查看顶部菜单栏是否有图标
+
+2. **手动打开管理面板**：
+   ```
+   在浏览器中访问：http://localhost:4098
+   ```
+
+3. **检查端口占用**：
+   ```bash
+   # Windows PowerShell
+   netstat -ano | findstr :4098
+   
+   # macOS/Linux
+   lsof -i :4098
+   ```
+
+4. **查看日志文件**：
+   - **Windows**：`%APPDATA%/opencode-bridge/logs/`
+   - **macOS**：`~/Library/Application Support/opencode-bridge/logs/`
+
+---
+
+### 其他问题
+
+如果遇到其他问题，请：
+1. 查看 [故障排查文档](./assets/docs/troubleshooting.md)
+2. 在 [GitHub Issues](https://github.com/HNGM-HP/opencode-bridge/issues) 搜索类似问题
+3. 提交新的 Issue 并附上错误日志
+
+---
+
 ### 源码部署（Linux / 开发者）
 
 #### 第一步：克隆项目

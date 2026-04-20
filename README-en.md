@@ -174,6 +174,101 @@ Windows and macOS users can download installers directly from [GitHub Releases](
 
 After installation, start the app and access `http://localhost:4098` to configure platforms.
 
+---
+
+## ❓ Common Installation Issues
+
+### macOS: "App is damaged" Error
+
+**Problem**:
+```
+"OpenCode Bridge" is damaged and can't be opened. You should move it to the Trash.
+```
+
+**Reason**:
+- macOS security mechanism (Gatekeeper) blocks unsigned apps
+- This is a free open-source project without Apple Developer certificate
+
+**Solutions** (choose one):
+
+#### Method 1: Right-click to Open (Recommended)
+```
+1. Right-click on "OpenCode Bridge.app"
+2. Hold the "Option" key on your keyboard
+3. Double-click the "Open" button
+4. Click "Open" in the confirmation dialog
+```
+
+#### Method 2: System Settings Override
+```
+1. Open "System Settings" → "Privacy & Security"
+2. Find the "OpenCode Bridge was blocked" message
+3. Click "Open Anyway"
+```
+
+#### Method 3: Command Line Remove Quarantine
+```bash
+# Execute in Terminal (replace with actual path)
+xattr -cr /Applications/OpenCode\ Bridge.app
+```
+
+**After this one-time operation**, you can launch normally by double-clicking.
+
+---
+
+### Windows: "Unrecognized App" Warning
+
+**Problem**:
+```
+Windows protected your PC
+Microsoft Defender SmartScreen blocked an unrecognized app
+```
+
+**Solution**:
+1. Click "More info"
+2. Click "Run anyway"
+
+**Note**: This is normal Windows Defender protection for unsigned apps. Confirm once and it will run normally.
+
+---
+
+### Can't Access Management Panel After Launch
+
+**Troubleshooting Steps**:
+
+1. **Check if app is running**:
+   - **Windows**: Look for OpenCode Bridge icon in system tray (bottom-right)
+   - **macOS**: Look for icon in top menu bar
+
+2. **Manually open management panel**:
+   ```
+   Visit in browser: http://localhost:4098
+   ```
+
+3. **Check port usage**:
+   ```bash
+   # Windows PowerShell
+   netstat -ano | findstr :4098
+
+   # macOS/Linux
+   lsof -i :4098
+   ```
+
+4. **View log files**:
+   - **Windows**: `%APPDATA%/opencode-bridge/logs/`
+   - **macOS**: `~/Library/Application Support/opencode-bridge/logs/`
+
+---
+
+### Other Issues
+
+If you encounter other issues:
+1. Check [Troubleshooting Guide](./assets/docs/troubleshooting.md)
+2. Search similar issues in [GitHub Issues](https://github.com/HNGM-HP/opencode-bridge/issues)
+3. Submit a new Issue with error logs
+
+---
+
 ### Source Deployment (Linux / Developers)
 
 #### 1. Clone Repository

@@ -188,11 +188,12 @@
       ],
       "icon": "assets/icon-1024.png",
       "category": "public.app-category.productivity",
-      "hardenedRuntime": true,
-      "gatekeeperAssess": false,
       "extendInfo": {
         "NSHighResolutionCapable": true,
-        "CFBundleShortVersionString": "${version}"
+        "CFBundleShortVersionString": "${version}",
+        "NSAppleEventsUsageDescription": "需要与系统交互以提供服务。",
+        "NSCameraUsageDescription": "需要访问摄像头以提供相关功能。",
+        "NSMicrophoneUsageDescription": "需要访问麦克风以提供相关功能。"
       }
     },
     "dmg": {
