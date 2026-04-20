@@ -38,29 +38,56 @@ let logFilePath = '';
 const recentBackendOutput: string[] = [];
 const MAX_RECENT_LINES = 40;
 
+// 日志轮转参数：单文件上限 1MB，保留 .1 / .2 共 3 份，总占用 ≤ 3MB
+const LOG_MAX_BYTES = 1 * 1024 * 1024; // 1 MB
+const LOG_BACKUPS   = 2;               // .1 和 .2，循环覆盖
+let logBytesWritten = 0;               // 追踪当前文件本次累计写入量（近似值）
+
+/** 将旧日志文件循环后移：.2 删除，.1→.2，当前→.1，重建当前 */
+function rotateLogFile(): void {
+  try { logStream?.end(); } catch { /* ignore */ }
+  logStream = null;
+
+  // 循环右移备份：先删最老的 .2，再逐级重命名
+  for (let i = LOG_BACKUPS; i >= 1; i--) {
+    const older = `${logFilePath}.${i}`;
+    const newer = i === 1 ? logFilePath : `${logFilePath}.${i - 1}`;
+    try { fs.unlinkSync(older); } catch { /* 不存在时忽略 */ }
+    try { fs.renameSync(newer, older); } catch { /* 不存在时忽略 */ }
+  }
+
+  logStream = fs.createWriteStream(logFilePath, { flags: 'a' });
+  logBytesWritten = 0;
+}
+
 function initFileLogger(): void {
   try {
     const logsDir = path.join(app.getPath('userData'), 'logs');
     fs.mkdirSync(logsDir, { recursive: true });
     logFilePath = path.join(logsDir, 'electron-main.log');
 
-    // 滚动：文件超过 2MB 时重命名为 .1，保留一份历史
+    // 启动时若当前文件已超限，立即轮转一次，避免带着上次的大文件继续追加
     try {
       const st = fs.statSync(logFilePath);
-      if (st.size > 2 * 1024 * 1024) {
-        fs.renameSync(logFilePath, logFilePath + '.1');
+      if (st.size > LOG_MAX_BYTES) {
+        // 临时创建 stream 指向旧文件，rotateLogFile 会关闭并移走它
+        logStream = fs.createWriteStream(logFilePath, { flags: 'a' });
+        rotateLogFile();
       }
     } catch {
       // 文件不存在，忽略
     }
 
-    logStream = fs.createWriteStream(logFilePath, { flags: 'a' });
+    if (!logStream) {
+      logStream = fs.createWriteStream(logFilePath, { flags: 'a' });
+    }
 
     const header = `\n===== OpenCode Bridge started at ${new Date().toISOString()} =====\n` +
       `pid=${process.pid} platform=${process.platform} electron=${process.versions.electron}\n` +
       `userData=${app.getPath('userData')}\n` +
       `execPath=${process.execPath}\n`;
     logStream.write(header);
+    logBytesWritten += Buffer.byteLength(header);
 
     // 劫持 console 的四个常用方法，让任何 console.log/error 同时落盘
     const origLog = console.log.bind(console);
@@ -71,7 +98,14 @@ function initFileLogger(): void {
     const writeLine = (level: string, args: unknown[]) => {
       const line = `[${new Date().toISOString()}] [${level}] ` +
         args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ') + '\n';
-      try { logStream?.write(line); } catch { /* ignore */ }
+      try {
+        // 运行时超限检测：写入前先检查，确保单次长会话也不会无限增长
+        if (logBytesWritten + Buffer.byteLength(line) > LOG_MAX_BYTES) {
+          rotateLogFile();
+        }
+        logStream?.write(line);
+        logBytesWritten += Buffer.byteLength(line);
+      } catch { /* ignore */ }
     };
 
     console.log = (...args: unknown[]) => { writeLine('log', args); origLog(...args); };

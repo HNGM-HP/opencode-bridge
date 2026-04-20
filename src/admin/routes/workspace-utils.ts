@@ -45,10 +45,13 @@ export function resolveWorkspaceDirectory(rawDirectory: unknown): WorkspaceDirec
       ? rawDirectory.trim()
       : undefined;
 
+  // AI 工作区脱钩 ALLOWED_DIRECTORIES 白名单：Web 管理面板已认证，
+  // 白名单仅约束平台接入（telegram/discord/qq/wecom 等外部消息入口）。
+  // 这里仍保留格式校验、危险路径拦截、存在性/可访问性与 realpath 规范化。
   const resolved = DirectoryPolicy.resolve(
     explicitDirectory
-      ? { explicitDirectory }
-      : undefined
+      ? { explicitDirectory, scope: 'workspace' }
+      : { scope: 'workspace' }
   );
 
   if (!resolved.ok) {

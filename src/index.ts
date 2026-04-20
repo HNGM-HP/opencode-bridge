@@ -1836,7 +1836,7 @@ async function main() {
   await lifecycleHandler.cleanUpOnStart();
 
   console.log('✅ 服务已就绪');
-  
+
   // 优雅退出处理
   let shuttingDown = false;
   const gracefulShutdown = async (signal: string) => {
@@ -1844,6 +1844,10 @@ async function main() {
       return;
     }
     shuttingDown = true;
+
+    // 内嵌模式下（Admin 进程内 Bridge 重启）不能让整个进程退出，
+    // 否则 Admin HTTP 服务一并被杀，导致"立即重启"实际只关闭不启动。
+    const isEmbeddedStop = signal === 'EMBEDDED_STOP';
 
     console.log(`\n[${signal}] 正在关闭服务...`);
 
@@ -1915,6 +1919,19 @@ async function main() {
       console.error('[System] 清理资源失败:', e);
     }
 
+    if (isEmbeddedStop) {
+      // 内嵌模式：不退出进程，只清理本次 main() 注册的信号监听器，
+      // 并重置 runningInstance，保证下一次 startBridge() 会真正重新启动。
+      try {
+        process.off('SIGINT', sigintHandler);
+        process.off('SIGTERM', sigtermHandler);
+        process.off('SIGUSR2', sigusr2Handler);
+      } catch { /* ignore */ }
+      runningInstance = null;
+      console.log('✅ 服务已安全关闭（内嵌模式，保留 Admin 进程）');
+      return;
+    }
+
     // 延迟退出以确保所有清理完成
     setTimeout(() => {
       console.log('✅ 服务已安全关闭');
@@ -1922,15 +1939,13 @@ async function main() {
     }, 500);
   };
 
-  process.on('SIGINT', () => {
-    void gracefulShutdown('SIGINT');
-  });
-  process.on('SIGTERM', () => {
-    void gracefulShutdown('SIGTERM');
-  });
-  process.on('SIGUSR2', () => {
-    void gracefulShutdown('SIGUSR2');
-  }); // nodemon 重启信号
+  const sigintHandler = () => { void gracefulShutdown('SIGINT'); };
+  const sigtermHandler = () => { void gracefulShutdown('SIGTERM'); };
+  const sigusr2Handler = () => { void gracefulShutdown('SIGUSR2'); }; // nodemon 重启信号
+
+  process.on('SIGINT', sigintHandler);
+  process.on('SIGTERM', sigtermHandler);
+  process.on('SIGUSR2', sigusr2Handler);
 
   // 返回停止函数，供进程合并模式下使用
   return {
