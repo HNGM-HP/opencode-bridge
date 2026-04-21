@@ -65,14 +65,57 @@
     </div>
 
     <div class="composer">
+      <!-- 附件预览列表 -->
+      <div v-if="attachments.length > 0" class="attachments-list">
+        <div
+          v-for="attachment in attachments"
+          :key="attachment.id"
+          :class="['attachment-item', { 'attachment-item--uploading': attachment.uploading, 'attachment-item--error': attachment.error }]"
+        >
+          <div class="attachment-item__icon">
+            <span v-if="attachment.uploading" class="uploading-spinner">⏳</span>
+            <span v-else-if="attachment.error">❌</span>
+            <span v-else>{{ getFileIcon(attachment.file.type || 'application/octet-stream') }}</span>
+          </div>
+          <div class="attachment-item__info">
+            <div class="attachment-item__name">{{ attachment.file.name }}</div>
+            <div class="attachment-item__meta">
+              <span v-if="attachment.uploading">上传中...</span>
+              <span v-else-if="attachment.error">{{ attachment.error }}</span>
+              <span v-else>{{ formatFileSize(attachment.file.size) }}</span>
+            </div>
+          </div>
+          <button
+            type="button"
+            class="attachment-item__remove"
+            @click="removeAttachment(attachment.id)"
+            :disabled="attachment.uploading"
+          >
+            ✕
+          </button>
+        </div>
+      </div>
+
+      <!-- 隐藏的文件输入 -->
+      <input
+        ref="fileInputRef"
+        type="file"
+        style="display: none"
+        multiple
+        @change="handleFileSelect"
+      />
+
       <el-input
         v-model="draftModel"
         type="textarea"
         resize="none"
         :rows="4"
         :disabled="disabled"
-        placeholder="输入你的问题。输入 / 可查看 OpenCode 或 Bridge 内置命令，Enter 发送，Ctrl + Enter 或 Shift + Enter 换行。"
+        placeholder="输入你的问题。输入 / 可查看 OpenCode 或 Bridge 内置命令，支持粘贴图片和文件，Enter 发送，Ctrl + Enter 或 Shift + Enter 换行。"
         @keydown="handleKeydown"
+        @paste="handlePaste"
+        @drop="handleDrop"
+        @dragover="handleDragOver"
       />
 
       <div v-if="showSlashPalette" class="slash-panel">
@@ -104,7 +147,17 @@
       </div>
 
       <div class="actions">
-        <span class="char-count">{{ draftModel.trim().length }} 字</span>
+        <div class="actions-left">
+          <el-button
+            type="default"
+            size="small"
+            :disabled="disabled"
+            @click="selectFiles"
+          >
+            📎 添加附件
+          </el-button>
+          <span class="char-count">{{ draftModel.trim().length }} 字</span>
+        </div>
         <div class="action-buttons">
           <el-button
             v-if="canAbort"
@@ -131,13 +184,23 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import { ElMessage } from 'element-plus'
 import type { ChatAgentInfo, ChatCommandInfo, ChatModelProviderInfo } from '../../api'
+import { chatApi } from '../../api'
 import { formatVariantLabel } from '../../composables/chat-model'
 import { getSlashCommands } from './slash-command-cache'
 
 interface ModelOption {
   key: string
   label: string
+}
+
+interface Attachment {
+  id: string
+  file: File
+  url?: string
+  uploading: boolean
+  error?: string
 }
 
 const props = defineProps<{
@@ -156,7 +219,7 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  submit: [{ text: string; providerId?: string; modelId?: string; variant?: string; agent?: string }]
+  submit: [{ text: string; parts?: Array<{ type: 'text'; text: string } | { type: 'file'; mime: string; url: string; filename?: string }>; providerId?: string; modelId?: string; variant?: string; agent?: string }]
   abort: []
   'update:draft': [string]
   'update:model-selection': [{ providerId?: string; modelId?: string }]
@@ -166,10 +229,160 @@ const emit = defineEmits<{
   'update:agentName': [string?]
 }>()
 
+// 隐藏的文件输入元素
+const fileInputRef = ref<HTMLInputElement | null>(null)
+
+// 附件列表
+const attachments = ref<Attachment[]>([])
+const uploadingCount = ref(0)
+
 const commands = ref<ChatCommandInfo[]>([])
 const commandsLoading = ref(false)
 const commandsError = ref('')
 const highlightedCommandIndex = ref(0)
+
+// 文件类型图标映射
+const getFileIcon = (mime: string): string => {
+  if (mime.startsWith('image/')) return '🖼️'
+  if (mime.startsWith('video/')) return '🎬'
+  if (mime.startsWith('audio/')) return '🎵'
+  if (mime.includes('pdf')) return '📄'
+  if (mime.includes('word') || mime.includes('document')) return '📝'
+  if (mime.includes('excel') || mime.includes('sheet')) return '📊'
+  if (mime.includes('powerpoint') || mime.includes('presentation')) return '📽️'
+  if (mime.includes('zip') || mime.includes('rar') || mime.includes('tar') || mime.includes('7z')) return '📦'
+  if (mime.includes('text') || mime.includes('json') || mime.includes('xml')) return '📃'
+  return '📎'
+}
+
+// 格式化文件大小
+const formatFileSize = (bytes: number): string => {
+  if (bytes === 0) return '0 B'
+  const k = 1024
+  const sizes = ['B', 'KB', 'MB', 'GB']
+  const i = Math.floor(Math.log(bytes) / Math.log(k))
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i]
+}
+
+// 选择文件
+const selectFiles = () => {
+  fileInputRef.value?.click()
+}
+
+// 处理文件选择
+const handleFileSelect = async (event: Event) => {
+  const target = event.target as HTMLInputElement
+  const files = target.files
+  if (!files || files.length === 0) return
+
+  await addFiles(Array.from(files))
+  target.value = '' // 重置 input 以允许选择相同文件
+}
+
+// 添加文件到附件列表
+const addFiles = async (files: File[]) => {
+  for (const file of files) {
+    // 生成唯一 ID
+    const id = `attachment-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
+    const attachment: Attachment = {
+      id,
+      file,
+      uploading: true,
+    }
+    attachments.value.push(attachment)
+
+    // 上传文件
+    uploadFile(attachment)
+  }
+}
+
+// 上传单个文件
+const uploadFile = async (attachment: Attachment) => {
+  uploadingCount.value++
+  try {
+    const result = await chatApi.uploadFile(attachment.file)
+    attachment.url = result.file.url
+    attachment.uploading = false
+  } catch (error) {
+    attachment.uploading = false
+    attachment.error = error instanceof Error ? error.message : '上传失败'
+    ElMessage.error(`上传失败: ${attachment.file.name}`)
+  } finally {
+    uploadingCount.value--
+  }
+}
+
+// 删除附件
+const removeAttachment = (id: string) => {
+  const index = attachments.value.findIndex(a => a.id === id)
+  if (index > -1) {
+    attachments.value.splice(index, 1)
+  }
+}
+
+// 处理粘贴
+const handlePaste = async (event: ClipboardEvent) => {
+  const items = event.clipboardData?.items
+  if (!items) return
+
+  const files: File[] = []
+  for (const item of Array.from(items)) {
+    if (item.kind === 'file' && item.type) {
+      const file = item.getAsFile()
+      if (file) {
+        files.push(file)
+      }
+    }
+  }
+
+  if (files.length > 0) {
+    event.preventDefault()
+    await addFiles(files)
+  }
+}
+
+// 处理拖拽
+const handleDrop = async (event: DragEvent) => {
+  event.preventDefault()
+  const files = event.dataTransfer?.files
+  if (!files || files.length === 0) return
+
+  await addFiles(Array.from(files))
+}
+
+const handleDragOver = (event: DragEvent) => {
+  event.preventDefault()
+}
+
+// 获取 MIME 类型
+const getMimeType = (file: File): string => {
+  return file.type || 'application/octet-stream'
+}
+
+// 获取所有 parts（文本 + 附件）
+const getAllParts = computed(() => {
+  const parts: Array<{ type: 'text'; text: string } | { type: 'file'; mime: string; url: string; filename?: string }> = []
+
+  // 添加附件
+  for (const attachment of attachments.value) {
+    if (attachment.url && !attachment.uploading && !attachment.error) {
+      parts.push({
+        type: 'file',
+        mime: getMimeType(attachment.file),
+        url: attachment.url,
+        filename: attachment.file.name,
+      })
+    }
+  }
+
+  // 添加文本（如果有）
+  const text = draftModel.value.trim()
+  if (text) {
+    parts.push({ type: 'text', text })
+  }
+
+  return parts
+})
 
 const normalizedProviders = computed(() => Array.isArray(props.providers) ? props.providers : [])
 const normalizedAgents = computed(() => Array.isArray(props.agents) ? props.agents : [])
@@ -212,9 +425,21 @@ const immediateCommand = computed<'undo' | 'abort' | null>(() => {
 })
 
 const submitDisabled = computed(() => {
-  if (props.disabled || !draftModel.value.trim()) {
-    return true
-  }
+  if (props.disabled) return true
+
+  // 检查是否有内容（文本或附件）
+  const hasText = draftModel.value.trim().length > 0
+  const hasAttachments = attachments.value.length > 0
+  const hasContent = hasText || hasAttachments
+
+  if (!hasContent) return true
+
+  // 检查是否有上传中的附件
+  if (uploadingCount.value > 0) return true
+
+  // 检查是否有上传失败的附件
+  const hasFailedAttachments = attachments.value.some(a => a.error)
+  if (hasFailedAttachments) return true
 
   if (immediateCommand.value === 'abort') {
     return props.aborting
@@ -340,16 +565,23 @@ function applySlashCommand(command: ChatCommandInfo): void {
 }
 
 function submit(): void {
+  if (submitDisabled.value) return
+
+  const parts = getAllParts.value
   const text = draftModel.value.trim()
-  if (!text || submitDisabled.value) return
+
   emit('submit', {
     text,
+    parts,
     providerId: props.providerId,
     modelId: props.modelId,
     variant: props.variant,
     agent: props.agentName,
   })
+
+  // 清空输入
   emit('update:draft', '')
+  attachments.value = []
 }
 
 function handleKeydown(event: KeyboardEvent): void {
@@ -426,6 +658,97 @@ function handleKeydown(event: KeyboardEvent): void {
   padding: 12px;
 }
 
+/* 附件列表样式 */
+.attachments-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.attachment-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  transition: all 0.2s;
+}
+
+.attachment-item--uploading {
+  background: #eff6ff;
+  border-color: #3b82f6;
+}
+
+.attachment-item--error {
+  background: #fef2f2;
+  border-color: #ef4444;
+}
+
+.attachment-item__icon {
+  font-size: 24px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.uploading-spinner {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.attachment-item__info {
+  flex: 1;
+  min-width: 0;
+}
+
+.attachment-item__name {
+  font-size: 13px;
+  font-weight: 500;
+  color: #1f2937;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.attachment-item__meta {
+  font-size: 11px;
+  color: #6b7280;
+  margin-top: 2px;
+}
+
+.attachment-item__remove {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  border: none;
+  background: transparent;
+  color: #9ca3af;
+  cursor: pointer;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  transition: all 0.2s;
+}
+
+.attachment-item__remove:hover:not(:disabled) {
+  background: #e5e7eb;
+  color: #374151;
+}
+
+.attachment-item__remove:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
 .slash-panel {
   display: grid;
   max-height: 280px;
@@ -494,6 +817,12 @@ function handleKeydown(event: KeyboardEvent): void {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
+}
+
+.actions-left {
+  display: flex;
+  align-items: center;
   gap: 12px;
 }
 

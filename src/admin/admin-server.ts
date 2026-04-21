@@ -33,6 +33,7 @@ import { registerWorkspaceGitRoutes } from './routes/workspace-git.js';
 import { registerWorkspaceFilesRoutes } from './routes/workspace-files.js';
 import { registerWorkspaceTerminalRoutes } from './routes/workspace-terminal.js';
 import { registerChatRoutes } from './routes/chat.js';
+import { registerChatUploadRoutes } from './routes/chat-upload.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -201,6 +202,7 @@ export function createAdminServer(options: AdminServerOptions): { start: () => v
   // ── Register Chat Routes (Phase A: Native Chat UI)
   // These routes use their own auth middleware (chatAuthMiddleware), not admin password
   registerChatRoutes(app);
+  registerChatUploadRoutes(app);
 
   // ── GET /api/config
   api.get('/config', (_req, res) => {

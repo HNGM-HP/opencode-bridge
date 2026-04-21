@@ -1090,6 +1090,7 @@ export const chatApi = {
   async sendPrompt(payload: {
     sessionId: string
     text: string
+    parts?: Array<{ type: 'text'; text: string } | { type: 'file'; mime: string; url: string; filename?: string }>
     providerId?: string
     modelId?: string
     agent?: string
@@ -1098,13 +1099,41 @@ export const chatApi = {
   }): Promise<void> {
     await http.post('/chat/prompt', {
       sessionId: payload.sessionId,
-      parts: [{ type: 'text', text: payload.text }],
+      parts: payload.parts || [{ type: 'text', text: payload.text }],
       providerId: payload.providerId,
       modelId: payload.modelId,
       agent: payload.agent,
       variant: payload.variant,
       directory: payload.directory,
     })
+  },
+
+  async uploadFile(file: File): Promise<{
+    ok: boolean
+    file: {
+      url: string
+      filename: string
+      mime: string
+      size: number
+    }
+  }> {
+    const formData = new FormData()
+    formData.append('file', file)
+
+    const res = await http.post<{
+      ok: boolean
+      file: {
+        url: string
+        filename: string
+        mime: string
+        size: number
+      }
+    }>('/chat/upload', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+    })
+    return res.data
   },
 
   async respondPermission(payload: {

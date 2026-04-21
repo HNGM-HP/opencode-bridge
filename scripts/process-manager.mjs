@@ -690,12 +690,12 @@ function startOpenCodeServe(options = {}) {
       });
     } else {
       // Unix / 回退: opencode serve
-      // Windows 下使用 cmd /c 来避免弹窗，并确保在后台运行
-      const cmdLine = isWindows() ? `cmd /c opencode serve` : `${exe.cmd} serve`;
-      child = spawn(cmdLine, {
+      // 修复：将命令和参数分开传递，并使用 shell 解析 PATH
+      const args = ['serve'];
+      child = spawn(exe.cmd, args, {
         detached: true,
         stdio: ['ignore', stdoutFd, stderrFd],
-        shell: isWindows(),
+        shell: true,  // ← 使用 shell 以解析 PATH
         windowsHide: isWindows(),
       });
     }
