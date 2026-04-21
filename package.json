@@ -116,10 +116,7 @@
       "dist-electron/**/*",
       "assets/**/*",
       "package.json",
-      "node_modules/**/*",
       "!**/*.ts",
-      "!**/node_modules/*/{CHANGELOG.md,README.md,readme.md,LICENSE,license}",
-      "!**/node_modules/.bin",
       "!**/*.{iml,o,hprof,orig,pyc,pyo,rbc,swp,csproj,sln,xproj}",
       "!.editorconfig",
       "!**/._*",
@@ -128,9 +125,6 @@
       "!web/src"
     ],
     "asar": true,
-    "asarUnpack": [
-      "**/node_modules/better-sqlite3/**/*"
-    ],
     "extraResources": [
       {
         "from": "dist",
@@ -151,6 +145,15 @@
         "to": "app/scripts",
         "filter": [
           "**/*"
+        ]
+      },
+      {
+        "from": "node_modules",
+        "to": "app/node_modules",
+        "filter": [
+          "**/*",
+          "!*/{CHANGELOG.md,README.md,readme.md,LICENSE,license}",
+          "!.bin/**"
         ]
       }
     ],
