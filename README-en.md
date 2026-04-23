@@ -449,28 +449,15 @@ For complete configuration parameters, refer to the [Configuration Center Docume
 
 ---
 
-## 📄 License
-
-This project is licensed under [GNU General Public License v3.0](LICENSE)
-
-**GPL v3 means:**
-- ✅ Free to use, modify and distribute
-- ✅ Can be used for commercial purposes
-- ✅ Must open source modified versions
-- ✅ Must retain original author copyright
-- ✅ Derivative works must use GPL v3 license
-
----
-
 ## 🌟 Contributing
 
 If this project helps you, please give it a Star!
 
-For issues or suggestions, feel free to submit an [Issue](https://github.com/HNGM-HP/opencode-bridge/issues) or [Pull Request](https://github.com/HNGM-HP/opencode-bridge/pulls).
+[![Star History Chart](https://api.star-history.com/svg?repos=ET06731/opencode-im-bridge&type=github&theme=hand-drawn)](https://star-history.com/#ET06731/opencode-im-bridge&Date)
 
 ---
 
-## 📞 Support
+## 📄 License
 
-- **GitHub Issues**: [Report Issues](https://github.com/HNGM-HP/opencode-bridge/issues)
-- **Project Home**: [GitHub Repository](https://github.com/HNGM-HP/opencode-bridge)
+This project is licensed under [GNU General Public License v3.0](LICENSE)
+

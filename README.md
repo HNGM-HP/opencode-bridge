@@ -468,29 +468,17 @@ http://localhost:4098
 
 ---
 
-## 📄 许可证
-
-本项目采用 [GNU General Public License v3.0](./LICENSE)。
-
-GPL v3 的核心要义：
-
-- ✅ 可自由使用、修改和分发
-- ✅ 可用于商业目的
-- ✅ 修改版本必须开源
-- ✅ 必须保留原作者版权声明
-- ✅ 衍生作品须采用 GPL v3 协议
-
----
-
 ## 🌟 贡献与反馈
 
 如果这个项目对你有帮助，欢迎点个 **Star** ⭐ 支持！
 
-遇到问题或有改进建议，请提交 [Issue](https://github.com/HNGM-HP/opencode-bridge/issues) 或 [Pull Request](https://github.com/HNGM-HP/opencode-bridge/pulls)，期待你的参与。
+[![Star History Chart](https://api.star-history.com/svg?repos=ET06731/opencode-im-bridge&type=github&theme=hand-drawn)](https://star-history.com/#ET06731/opencode-im-bridge&Date)
 
 ---
 
-## 📞 技术支持
+## 📄 许可证
 
-- **GitHub Issues**：[问题反馈](https://github.com/HNGM-HP/opencode-bridge/issues)
-- **项目主页**：[GitHub Repository](https://github.com/HNGM-HP/opencode-bridge)
+本项目采用 [GNU General Public License v3.0](./LICENSE)。
+
+---
+

@@ -389,6 +389,7 @@ class OpencodeClientWrapper extends EventEmitter {
   private eventListeningEnabled = false;
   private eventStreamActive = false;
   private directoryEventStreams: Map<string, DirectoryEventStreamEntry> = new Map();
+  private knownSessionDirectories: Set<string> = new Set();
   // 防止并发调用 ensureDirectoryEventStream 对同一目录建立多条 SSE 连接
   private pendingDirectoryStreams: Map<string, Promise<void>> = new Map();
   
@@ -791,6 +792,14 @@ class OpencodeClientWrapper extends EventEmitter {
     return normalized.length > 0 ? normalized : undefined;
   }
 
+  private rememberDirectory(directory?: string): string | undefined {
+    const normalized = this.normalizeDirectory(directory);
+    if (normalized) {
+      this.knownSessionDirectories.add(normalized);
+    }
+    return normalized;
+  }
+
   private buildPermissionDirectoryCandidates(options?: PermissionResponseOptions): Array<string | undefined> {
     const candidates: Array<string | undefined> = [];
     const seen = new Set<string>();
@@ -1188,11 +1197,15 @@ class OpencodeClientWrapper extends EventEmitter {
   // 获取会话列表（可按目录过滤）
   async listSessions(options?: SessionQueryOptions): Promise<Session[]> {
     const client = this.getClient();
-    const directory = this.normalizeDirectory(options?.directory);
+    const directory = this.rememberDirectory(options?.directory);
     const result = await client.session.list(
       directory ? { query: { directory } } : undefined
     );
-    return Array.isArray(result.data) ? result.data : [];
+    const sessions = Array.isArray(result.data) ? result.data : [];
+    for (const session of sessions) {
+      this.rememberDirectory(session.directory);
+    }
+    return sessions;
   }
 
   // 跨工作区聚合会话列表
@@ -1200,6 +1213,7 @@ class OpencodeClientWrapper extends EventEmitter {
     const merged = new Map<string, Session>();
     const upsertSessions = (sessions: Session[]): void => {
       for (const session of sessions) {
+        this.rememberDirectory(session.directory);
         const existing = merged.get(session.id);
         if (!existing) {
           merged.set(session.id, session);
@@ -1225,15 +1239,24 @@ class OpencodeClientWrapper extends EventEmitter {
       const projects = await this.listProjects();
       const seenDirectories = new Set<string>();
       for (const project of projects) {
-        const normalized = this.normalizeDirectory(project.worktree);
+        const normalized = this.rememberDirectory(project.worktree);
         if (!normalized || seenDirectories.has(normalized)) {
           continue;
         }
         seenDirectories.add(normalized);
         directories.push(normalized);
       }
+
+      for (const knownDirectory of this.knownSessionDirectories) {
+        if (seenDirectories.has(knownDirectory)) {
+          continue;
+        }
+        seenDirectories.add(knownDirectory);
+        directories.push(knownDirectory);
+      }
     } catch (error) {
       console.warn('[OpenCode] 获取项目列表失败:', error);
+      directories = Array.from(this.knownSessionDirectories);
     }
 
     const sessionGroups = await Promise.all(
@@ -1292,7 +1315,7 @@ class OpencodeClientWrapper extends EventEmitter {
       return null;
     }
 
-    const directory = this.normalizeDirectory(options?.directory);
+    const directory = this.rememberDirectory(options?.directory);
     const result = await client.session.get({
       path: { id: normalizedSessionId },
       ...(directory ? { query: { directory } } : {}),
@@ -1309,6 +1332,10 @@ class OpencodeClientWrapper extends EventEmitter {
         ? `获取会话失败（HTTP ${statusCode}）: ${detail}`
         : `获取会话失败: ${detail}`;
       throw new Error(appendAuthHint(message, statusCode));
+    }
+
+    if (result.data?.directory) {
+      this.rememberDirectory(result.data.directory);
     }
 
     return result.data || null;
@@ -1330,12 +1357,20 @@ class OpencodeClientWrapper extends EventEmitter {
     const directories: string[] = [];
     const seenDirectories = new Set<string>();
     for (const project of projects) {
-      const normalized = this.normalizeDirectory(project.worktree);
+      const normalized = this.rememberDirectory(project.worktree);
       if (!normalized || seenDirectories.has(normalized)) {
         continue;
       }
       seenDirectories.add(normalized);
       directories.push(normalized);
+    }
+
+    for (const knownDirectory of this.knownSessionDirectories) {
+      if (seenDirectories.has(knownDirectory)) {
+        continue;
+      }
+      seenDirectories.add(knownDirectory);
+      directories.push(knownDirectory);
     }
 
     for (const directory of directories) {
@@ -1351,7 +1386,7 @@ class OpencodeClientWrapper extends EventEmitter {
   // 创建新会话
   async createSession(title?: string, directory?: string): Promise<Session> {
     const client = this.getClient();
-    const normalizedDir = this.normalizeDirectory(directory);
+    const normalizedDir = this.rememberDirectory(directory);
     if (normalizedDir) {
       void this.ensureDirectoryEventStream(normalizedDir);
     }
@@ -1359,6 +1394,9 @@ class OpencodeClientWrapper extends EventEmitter {
       body: { title: title || '新对话' },
       ...(normalizedDir ? { query: { directory: normalizedDir } } : {}),
     });
+    if (result.data?.directory) {
+      this.rememberDirectory(result.data.directory);
+    }
     return result.data!;
   }
 
