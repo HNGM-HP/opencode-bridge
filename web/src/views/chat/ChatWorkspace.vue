@@ -47,7 +47,7 @@
         :hidden-message-count="hiddenMessageCount"
         :tasks="tasks"
         :sending="sending"
-        :running="running"
+        :running="uiRunning"
         :aborting="aborting"
         :stream-state="streamState"
         :last-error="lastError"
@@ -298,7 +298,23 @@ const panelDefinitions = [
 const workspaceDirectory = computed(() => currentSession.value?.directory || configStore.settings.DEFAULT_WORK_DIRECTORY || '')
 const messageCount = computed(() => Math.max(messageTotal.value, messages.value.length))
 const hiddenMessageCount = computed(() => Math.max(totalTurns.value - buildConversationTurns(messages.value).length, 0))
-const uiRunning = computed(() => sending.value || running.value)
+const hasStreamingMessage = computed(() => {
+  return messages.value.some(message => message.role === 'assistant' && message.status === 'streaming')
+})
+const hasRunningTool = computed(() => {
+  return messages.value.some(message => message.tools.some(tool => tool.status === 'running'))
+})
+const hasRunningTask = computed(() => {
+  return tasks.value.some(task => task.status === 'in_progress' || task.status === 'running')
+})
+const uiRunning = computed(() => {
+  return aborting.value
+    || sending.value
+    || Boolean(activePermission.value)
+    || hasStreamingMessage.value
+    || hasRunningTool.value
+    || hasRunningTask.value
+})
 const primaryAgents = computed(() => availableAgents.value.filter(agent => agent.hidden !== true && agent.mode !== 'subagent'))
 const fallbackModelProviders = computed<ChatModelProviderInfo[]>(() => {
   return configStore.modelProviders.map(provider => ({

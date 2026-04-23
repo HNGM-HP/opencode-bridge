@@ -6,6 +6,7 @@ import {
   createErrorAssistantMessage,
   createOptimisticUserMessage,
   extractTasksFromHistory,
+  finalizeStreamingMessages,
   mergeChatMessages,
   normalizeHistoryMessage,
   type ChatMessageVm,
@@ -119,6 +120,7 @@ export function useChatMessages(sessionId: Ref<string | null>) {
         if (event.status === 'idle') {
           sending.value = false
           running.value = false
+          finalizeStreamingMessages(messages.value)
         } else {
           running.value = true
         }
@@ -134,6 +136,7 @@ export function useChatMessages(sessionId: Ref<string | null>) {
       case 'session_idle':
         sending.value = false
         running.value = false
+        finalizeStreamingMessages(messages.value)
         return
 
       case 'message_end':

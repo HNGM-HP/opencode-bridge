@@ -159,16 +159,10 @@ function startBackend() {
     return;
   }
 
-  // 获取应用根目录
-  // 打包后，extraResources 将 dist 复制到 app.asar 外的 app/dist/ 目录
-  // 需要使用 process.resourcesPath 访问这些文件
   let backendPath: string;
   if (isDev) {
     backendPath = path.resolve(__dirname, '../dist/admin/index.js');
   } else {
-    // macOS: /Applications/OpenCode Bridge.app/Contents/Resources/app/dist/admin/index.js
-    // Windows: C:\Program Files\OpenCode Bridge\resources\app\dist\admin\index.js
-    // Linux: /opt/opencode-bridge/resources/app/dist/admin/index.js
     backendPath = path.join(process.resourcesPath, 'app', 'dist', 'admin', 'index.js');
   }
 
@@ -179,6 +173,15 @@ function startBackend() {
   console.log('[Electron] App path:', app.getAppPath());
   console.log('[Electron] Data directory:', dataPath);
   console.log('[Electron] Starting backend from:', backendPath);
+  console.log(`[Electron] platform=${process.platform} arch=${process.arch} electron=${process.versions.electron} node=${process.versions.node}`);
+
+  if (!fs.existsSync(backendPath)) {
+    const msg = `[Backend] FATAL: 后端入口不存在: ${backendPath}\n` +
+      `[Backend] 请检查应用安装是否完整。如果是 macOS，尝试: xattr -cr "/Applications/OpenCode Bridge.app"`;
+    rememberBackendLine(msg);
+    console.error(msg);
+    return;
+  }
 
   backendProcess = spawn(process.execPath, [backendPath], {
     env: {
@@ -662,13 +665,34 @@ app.whenReady().then(async () => {
   if (!isReady) {
     console.error('[Electron] Admin Server failed to start');
 
-    // 把最后几行后端输出拼进 detail，用户不用命令行也能看到原因
     const tail = recentBackendOutput.slice(-20).join('\n') || '(子进程没有任何输出，可能 spawn 本身就失败了)';
+
+    const archInfo = `平台: ${process.platform} / 架构: ${process.arch} / Electron: ${process.versions.electron} / Node: ${process.versions.node}`;
+
+    let diagnosticHints = '';
+    if (tail.includes('better-sqlite3') || tail.includes('dlopen') || tail.includes('MODULE_NOT_FOUND')) {
+      diagnosticHints = '\n\n⚠️ 检测到原生模块加载失败（better-sqlite3），可能原因：\n';
+      if (process.platform === 'darwin') {
+        diagnosticHints +=
+          '• 架构不匹配：确认 DMG 与 CPU 架构匹配（arm64=Apple Silicon, x64=Intel）\n' +
+          '• macOS 安全隔离：在终端执行 xattr -cr "/Applications/OpenCode Bridge.app"\n' +
+          '• 配置损坏：删除 ~/Library/Application Support/opencode-bridge/data/config.db';
+      } else if (process.platform === 'linux') {
+        diagnosticHints +=
+          '• 执行 npm run rebuild 重新编译原生模块\n' +
+          '• 检查 Node.js 版本兼容性';
+      } else {
+        diagnosticHints +=
+          '• 原生模块编译版本不匹配，请尝试重新安装';
+      }
+    }
+
     const detail =
       `端口: ${ADMIN_PORT}\n` +
+      `${archInfo}\n` +
       `日志文件: ${logFilePath || '(未初始化)'}\n` +
       `数据目录: ${getUserDataPath()}\n` +
-      `\n最近的后端输出：\n${tail}`;
+      `\n最近的后端输出：\n${tail}${diagnosticHints}`;
 
     const result = await dialog.showMessageBox(null, {
       type: 'error',

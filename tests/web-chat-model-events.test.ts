@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { applyChatEvent, buildConversationTurns, type ChatMessageVm } from '../web/src/composables/chat-model.ts';
+import { applyChatEvent, buildConversationTurns, finalizeStreamingMessages, type ChatMessageVm } from '../web/src/composables/chat-model.ts';
 
 describe('web chat model event handling', () => {
   it('user message_start 应把最新 optimistic user 对齐成真实消息 ID', () => {
@@ -283,5 +283,27 @@ describe('web chat model event handling', () => {
       createdAt: expect.any(Number),
     });
     expect(messages[1].createdAt).toBeGreaterThanOrEqual(messages[0].createdAt);
+  });
+
+  it('session idle 收到后应收口残留的 streaming assistant 消息', () => {
+    const messages: ChatMessageVm[] = [
+      {
+        id: 'assistant-4',
+        role: 'assistant',
+        createdAt: 3000,
+        text: '最终回复',
+        reasoning: '',
+        tools: [],
+        status: 'streaming',
+      },
+    ];
+
+    finalizeStreamingMessages(messages);
+
+    expect(messages[0]).toMatchObject({
+      id: 'assistant-4',
+      status: 'done',
+      text: '最终回复',
+    });
   });
 });

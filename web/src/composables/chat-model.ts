@@ -398,6 +398,14 @@ export function applyChatEvent(messages: ChatMessageVm[], event: ChatEvent): voi
   }
 }
 
+export function finalizeStreamingMessages(messages: ChatMessageVm[]): void {
+  for (const message of messages) {
+    if (message.role === 'assistant' && message.status === 'streaming') {
+      message.status = 'done'
+    }
+  }
+}
+
 export function createOptimisticUserMessage(
   text: string,
   model?: ChatModelRef,

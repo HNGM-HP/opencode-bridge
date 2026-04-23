@@ -126,5 +126,12 @@ async function main() {
 
 main().catch((err) => {
   console.error('[Admin] 启动失败:', err);
+  if (err?.code === 'MODULE_NOT_FOUND' || String(err?.message || '').includes('better-sqlite3')) {
+    console.error('[Admin] 原生模块加载失败，诊断信息:');
+    console.error(`[Admin] platform=${process.platform} arch=${process.arch} node=${process.versions.node}`);
+    if (process.platform === 'darwin') {
+      console.error('[Admin] macOS: 请确认安装包与 CPU 架构匹配，或执行 xattr -cr 移除安全隔离');
+    }
+  }
   process.exit(1);
 });

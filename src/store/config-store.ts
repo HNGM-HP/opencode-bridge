@@ -7,10 +7,41 @@
  * 3. 首次启动时若无 DB 则返回空对象，由 config.ts 决定是否迁移 .env
  */
 
-import Database from 'better-sqlite3';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import type Database from 'better-sqlite3';
+
+let DatabaseCtor: typeof Database;
+
+try {
+  DatabaseCtor = (await import('better-sqlite3')).default;
+} catch (err: any) {
+  const msg = [
+    '[ConfigStore] FATAL: 无法加载 better-sqlite3 原生模块。',
+    `[ConfigStore] 平台: ${process.platform} 架构: ${process.arch} Node: ${process.versions.node}`,
+    `[ConfigStore] 错误: ${err?.message || err}`,
+  ];
+  if (process.platform === 'darwin') {
+    msg.push(
+      '[ConfigStore] macOS 排查建议:',
+      '  1. 确认下载的安装包与 CPU 架构匹配 (arm64 = Apple Silicon, x64 = Intel)',
+      '  2. 执行: xattr -cr "/Applications/OpenCode Bridge.app"  (移除安全隔离)',
+      '  3. 删除配置数据库后重试: rm ~/Library/Application\\ Support/opencode-bridge/data/config.db',
+    );
+  }
+  if (process.platform === 'linux' && process.env.ELECTRON_RUN_AS_NODE === '1') {
+    msg.push(
+      '[ConfigStore] Linux Electron 环境排查建议:',
+      '  1. 确认已执行 electron-rebuild: npm run rebuild',
+      '  2. 检查 .node 文件权限: ls -la node_modules/better-sqlite3/prebuilds/',
+    );
+  }
+  for (const line of msg) {
+    console.error(line);
+  }
+  throw err;
+}
 
 // ──────────────────────────────────────────────
 // 数据结构：与 .env.example 完整对应的扁平 KV 类型
@@ -188,7 +219,7 @@ class ConfigStore {
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }
-    this.db = new Database(this.dbPath);
+    this.db = new DatabaseCtor(this.dbPath);
     this.initSchema();
   }
 
