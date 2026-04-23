@@ -2,6 +2,7 @@ import { ref, watch, type Ref } from 'vue'
 import { chatApi, type ChatEvent, type ChatModelRef } from '../api'
 import {
   applyChatEvent,
+  buildConversationTurns,
   createErrorAssistantMessage,
   createOptimisticUserMessage,
   extractTasksFromHistory,
@@ -22,9 +23,11 @@ export function useChatMessages(sessionId: Ref<string | null>) {
   const loading = ref(false)
   const loadingMore = ref(false)
   const sending = ref(false)
+  const running = ref(false)
   const lastError = ref<string | null>(null)
   const streamState = ref<ChatStreamState>('disconnected')
   const total = ref(0)
+  const totalTurns = ref(0)
   const hasMore = ref(false)
   const nextCursor = ref<string | null>(null)
   const permission = usePermission()
@@ -43,6 +46,7 @@ export function useChatMessages(sessionId: Ref<string | null>) {
     const latestTasks = Array.isArray(page.tasks) ? page.tasks : []
     tasks.value = latestTasks.length > 0 ? latestTasks : extractTasksFromHistory(page.messages)
     total.value = page.total
+    totalTurns.value = page.totalTurns ?? buildConversationTurns(page.messages.map(normalizeHistoryMessage)).length
     hasMore.value = page.hasMore
     nextCursor.value = page.nextCursor
     messages.value = mergeChatMessages(page.messages.map(normalizeHistoryMessage), [])
@@ -70,8 +74,10 @@ export function useChatMessages(sessionId: Ref<string | null>) {
       const currentVersion = requestVersion
       messages.value = []
       tasks.value = []
+      running.value = false
       lastError.value = null
       total.value = 0
+      totalTurns.value = 0
       hasMore.value = false
       nextCursor.value = null
       permission.reset()
@@ -112,21 +118,36 @@ export function useChatMessages(sessionId: Ref<string | null>) {
       case 'session_status':
         if (event.status === 'idle') {
           sending.value = false
+          running.value = false
+        } else {
+          running.value = true
         }
         return
 
       case 'error':
         lastError.value = event.message
         sending.value = false
+        running.value = false
         messages.value = [...messages.value, createErrorAssistantMessage(event.message)]
         return
 
       case 'session_idle':
         sending.value = false
+        running.value = false
         return
 
       case 'message_end':
         sending.value = false
+        running.value = false
+        applyChatEvent(messages.value, event)
+        return
+
+      case 'message_start':
+      case 'text_delta':
+      case 'reasoning_delta':
+      case 'tool_start':
+      case 'tool_delta':
+        running.value = true
         applyChatEvent(messages.value, event)
         return
 
@@ -152,6 +173,7 @@ export function useChatMessages(sessionId: Ref<string | null>) {
       const latestTasks = Array.isArray(page.tasks) ? page.tasks : []
       tasks.value = latestTasks.length > 0 ? latestTasks : tasks.value
       total.value = page.total
+      totalTurns.value = page.totalTurns ?? totalTurns.value
       hasMore.value = page.hasMore
       nextCursor.value = page.nextCursor
       messages.value = mergeChatMessages(page.messages.map(normalizeHistoryMessage), messages.value)
@@ -183,6 +205,7 @@ export function useChatMessages(sessionId: Ref<string | null>) {
 
     messages.value = [...messages.value, createOptimisticUserMessage(trimmed, model, payload.parts)]
     sending.value = true
+    running.value = true
     lastError.value = null
 
     try {
@@ -197,6 +220,7 @@ export function useChatMessages(sessionId: Ref<string | null>) {
       })
     } catch (error) {
       sending.value = false
+      running.value = false
       const message = error instanceof Error ? error.message : '发送消息失败'
       lastError.value = message
       messages.value = [...messages.value, createErrorAssistantMessage(message)]
@@ -208,6 +232,7 @@ export function useChatMessages(sessionId: Ref<string | null>) {
       messages.value = []
       tasks.value = []
       total.value = 0
+      totalTurns.value = 0
       hasMore.value = false
       nextCursor.value = null
       return
@@ -237,7 +262,46 @@ export function useChatMessages(sessionId: Ref<string | null>) {
     const removedCount = messages.value.length - index
     messages.value = messages.value.slice(0, index)
     total.value = Math.max(messages.value.length, total.value - removedCount)
+    totalTurns.value = Math.min(totalTurns.value, buildConversationTurns(messages.value).length)
     sending.value = false
+    running.value = false
+  }
+
+  function discardConversationFromMessage(messageId: string): void {
+    const turns = buildConversationTurns(messages.value)
+    const turnIndex = turns.findIndex(turn => {
+      if (turn.userMessage?.id === messageId) return true
+      return turn.assistantMessages.some(message => message.id === messageId)
+    })
+
+    if (turnIndex < 0) {
+      discardFromMessage(messageId)
+      return
+    }
+
+    const retainedTurns = turns.slice(0, turnIndex)
+    const retainedIds = new Set<string>()
+    for (const turn of retainedTurns) {
+      if (turn.userMessage?.id) retainedIds.add(turn.userMessage.id)
+      for (const assistantMessage of turn.assistantMessages) {
+        retainedIds.add(assistantMessage.id)
+      }
+    }
+
+    messages.value = messages.value.filter(message => retainedIds.has(message.id))
+    total.value = Math.min(total.value, messages.value.length)
+    totalTurns.value = Math.min(totalTurns.value, retainedTurns.length)
+    sending.value = false
+    running.value = false
+  }
+
+  function retainMessages(messageIds: string[]): void {
+    const allowed = new Set(messageIds.filter(Boolean))
+    messages.value = messages.value.filter(message => allowed.has(message.id))
+    total.value = Math.min(total.value, messages.value.length)
+    totalTurns.value = Math.min(totalTurns.value, buildConversationTurns(messages.value).length)
+    sending.value = false
+    running.value = false
   }
 
   return {
@@ -246,9 +310,11 @@ export function useChatMessages(sessionId: Ref<string | null>) {
     loading,
     loadingMore,
     sending,
+    running,
     lastError,
     streamState,
     total,
+    totalTurns,
     hasMore,
     permissionQueue: permission.queue,
     activePermission: permission.activeRequest,
@@ -258,5 +324,7 @@ export function useChatMessages(sessionId: Ref<string | null>) {
     sendText,
     reload,
     discardFromMessage,
+    discardConversationFromMessage,
+    retainMessages,
   }
 }

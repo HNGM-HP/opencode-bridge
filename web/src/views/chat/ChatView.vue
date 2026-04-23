@@ -5,6 +5,7 @@
       :message-count="messages.length + hiddenMessageCount"
       :stream-state="streamState"
       :sending="sending"
+      :running="running"
       :aborting="aborting"
       :model-label="modelLabel"
       :effort-label="effortLabel"
@@ -48,6 +49,11 @@
       @revert="$emit('revert', $event)"
     />
 
+    <TaskPlanPreview
+      :tasks="tasks"
+      :active="running || aborting"
+    />
+
     <MessageInput
       :providers="providers"
       :draft="draft"
@@ -61,7 +67,7 @@
       :draft-attachments-key="draftAttachmentsKey"
       :disabled="false"
       :sending="sending"
-      :can-abort="sending || streamState === 'connected'"
+      :can-abort="running"
       :aborting="aborting"
       @submit="$emit('submit', $event)"
       @abort="$emit('abort')"
@@ -86,7 +92,8 @@ import { defineAsyncComponent } from 'vue'
 import MessageInput from './MessageInput.vue'
 import MessageList from './MessageList.vue'
 import SessionHeader from './SessionHeader.vue'
-import type { ChatAgentInfo, ChatModelProviderInfo, ChatSessionSummary } from '../../api'
+import TaskPlanPreview from './TaskPlanPreview.vue'
+import type { ChatAgentInfo, ChatModelProviderInfo, ChatSessionSummary, ChatTodoItem } from '../../api'
 import type { ChatMessageVm, ChatStreamState } from '../../composables/chat-model'
 
 const TerminalPanel = defineAsyncComponent(() => import('./side-panels/TerminalPanel.vue'))
@@ -98,7 +105,9 @@ defineProps<{
   loadingMore: boolean
   hasMoreMessages: boolean
   hiddenMessageCount: number
+  tasks: ChatTodoItem[]
   sending: boolean
+  running: boolean
   aborting: boolean
   streamState: ChatStreamState
   lastError: string | null

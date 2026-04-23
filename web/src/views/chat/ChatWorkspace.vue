@@ -45,7 +45,9 @@
         :loading-more="messagesLoadingMore"
         :has-more-messages="hasMoreMessages"
         :hidden-message-count="hiddenMessageCount"
+        :tasks="tasks"
         :sending="sending"
+        :running="running"
         :aborting="aborting"
         :stream-state="streamState"
         :last-error="lastError"
@@ -202,7 +204,7 @@ import {
 import ChatView from './ChatView.vue'
 import PermissionDialog from './PermissionDialog.vue'
 import SessionSidebar from './SessionSidebar.vue'
-import { formatVariantLabel, resolveSupportedVariant } from '../../composables/chat-model'
+import { buildConversationTurns, formatVariantLabel, resolveSupportedVariant } from '../../composables/chat-model'
 import { useChatMessages } from '../../composables/useChatMessages'
 import { useChatSessions } from '../../composables/useChatSessions'
 import { useConfigStore } from '../../stores/config'
@@ -239,9 +241,11 @@ const {
   loading: messagesLoading,
   loadingMore: messagesLoadingMore,
   sending,
+  running,
   lastError,
   streamState,
   total: messageTotal,
+  totalTurns,
   hasMore: hasMoreMessages,
   activePermission,
   resolvePermissionRequest,
@@ -249,7 +253,8 @@ const {
   loadMoreHistory,
   sendText,
   reload: reloadMessages,
-  discardFromMessage,
+  discardConversationFromMessage,
+  retainMessages,
 } = useChatMessages(activeSessionId)
 
 const sidebarWidth = ref(300)
@@ -292,7 +297,7 @@ const panelDefinitions = [
 
 const workspaceDirectory = computed(() => currentSession.value?.directory || configStore.settings.DEFAULT_WORK_DIRECTORY || '')
 const messageCount = computed(() => Math.max(messageTotal.value, messages.value.length))
-const hiddenMessageCount = computed(() => Math.max(messageTotal.value - messages.value.length, 0))
+const hiddenMessageCount = computed(() => Math.max(totalTurns.value - buildConversationTurns(messages.value).length, 0))
 const primaryAgents = computed(() => availableAgents.value.filter(agent => agent.hidden !== true && agent.mode !== 'subagent'))
 const fallbackModelProviders = computed<ChatModelProviderInfo[]>(() => {
   return configStore.modelProviders.map(provider => ({
@@ -1037,6 +1042,52 @@ function handleReconnect(): void {
   ElMessage.success('正在重新连接会话流')
 }
 
+function collectRetainedMessageIdsBeforeTurn(messageId: string): string[] {
+  const turns = buildConversationTurns(messages.value)
+  const turnIndex = turns.findIndex(turn => {
+    if (turn.userMessage?.id === messageId) return true
+    return turn.assistantMessages.some(item => item.id === messageId)
+  })
+
+  if (turnIndex < 0) {
+    return messages.value.map(item => item.id)
+  }
+
+  return turns.slice(0, turnIndex).flatMap(turn => {
+    const ids: string[] = []
+    if (turn.userMessage?.id) ids.push(turn.userMessage.id)
+    for (const assistantMessage of turn.assistantMessages) {
+      ids.push(assistantMessage.id)
+    }
+    return ids
+  })
+}
+
+async function waitForRevertSettled(sessionId: string, removedMessageIds: string[]): Promise<void> {
+  const targets = removedMessageIds.filter(Boolean)
+  if (targets.length === 0) {
+    await reloadMessages()
+    return
+  }
+
+  const maxAttempts = 8
+  const delayMs = 180
+  const limit = Math.min(Math.max(buildConversationTurns(messages.value).length + 5, 30), 100)
+
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const page = await chatApi.getMessages(sessionId, { limit })
+    const ids = new Set(page.messages.map(item => item.info.id))
+    if (targets.every(id => !ids.has(id))) {
+      await reloadMessages()
+      return
+    }
+
+    await new Promise(resolve => window.setTimeout(resolve, delayMs))
+  }
+
+  await reloadMessages()
+}
+
 function buildRevertTarget(message: ChatMessageVm): {
   revertMessageId?: string
   trimMessageId: string
@@ -1106,11 +1157,13 @@ async function handleRevert(message: ChatMessageVm): Promise<void> {
     // 重新在刷新后的消息列表中查找对应目标
     const refreshedTarget = buildRevertTarget(message)
     if (refreshedTarget?.revertMessageId) {
+      const retainedMessageIds = collectRetainedMessageIdsBeforeTurn(refreshedTarget.trimMessageId)
       // 拿到真实 ID 了，走后端回退
-      discardFromMessage(refreshedTarget.trimMessageId)
+      discardConversationFromMessage(refreshedTarget.trimMessageId)
       try {
         await chatApi.revertSession(activeSessionId.value, refreshedTarget.revertMessageId)
-        await reloadMessages()
+        await waitForRevertSettled(activeSessionId.value, [refreshedTarget.trimMessageId, refreshedTarget.revertMessageId])
+        retainMessages(retainedMessageIds)
         composerDraft.value = refreshedTarget.draftText
         composerDraftAttachments.value = refreshedTarget.draftAttachments
         composerDraftAttachmentsKey.value += 1
@@ -1121,7 +1174,7 @@ async function handleRevert(message: ChatMessageVm): Promise<void> {
       }
     } else {
       // 后端也没有，仅做本地清理
-      discardFromMessage(target.trimMessageId)
+      discardConversationFromMessage(target.trimMessageId)
       composerDraft.value = target.draftText
       composerDraftAttachments.value = target.draftAttachments
       composerDraftAttachmentsKey.value += 1
@@ -1131,10 +1184,12 @@ async function handleRevert(message: ChatMessageVm): Promise<void> {
   }
 
   // 有后端真实 ID，执行正常回退流程
-  discardFromMessage(target.trimMessageId)
+  const retainedMessageIds = collectRetainedMessageIdsBeforeTurn(target.trimMessageId)
+  discardConversationFromMessage(target.trimMessageId)
   try {
     await chatApi.revertSession(activeSessionId.value, target.revertMessageId)
-    await reloadMessages()
+    await waitForRevertSettled(activeSessionId.value, [target.trimMessageId, target.revertMessageId])
+    retainMessages(retainedMessageIds)
     composerDraft.value = target.draftText
     composerDraftAttachments.value = target.draftAttachments
     composerDraftAttachmentsKey.value += 1
@@ -1158,7 +1213,7 @@ function handleWorkspaceKeydown(event: KeyboardEvent): void {
   if (event.key !== 'Escape') return
   if (activePermission.value || aborting.value) return
   if (!activeSessionId.value) return
-  if (!(sending.value || streamState.value === 'connected')) return
+  if (!running.value) return
 
   event.preventDefault()
   void handleAbort()

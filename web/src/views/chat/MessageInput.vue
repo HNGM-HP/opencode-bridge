@@ -164,21 +164,19 @@
         </div>
         <div class="action-buttons">
           <el-button
-            v-if="canAbort"
-            type="danger"
-            plain
-            :loading="aborting"
-            @click="$emit('abort')"
+            :type="primaryActionType"
+            :disabled="primaryActionDisabled"
+            :class="['primary-action-btn', { 'primary-action-btn--running': showRunningState }]"
+            @click="handlePrimaryAction"
           >
-            中止
-          </el-button>
-          <el-button
-            type="primary"
-            :loading="sending && !canAbort"
-            :disabled="submitDisabled"
-            @click="submit"
-          >
-            发送
+            <span class="primary-action-content">
+              <span v-if="showRunningState" class="primary-action-indicator" aria-hidden="true">
+                <span />
+                <span />
+                <span />
+              </span>
+              <span>{{ primaryActionLabel }}</span>
+            </span>
           </el-button>
         </div>
       </div>
@@ -470,6 +468,21 @@ const submitDisabled = computed(() => {
   return props.sending
 })
 
+const primaryActionLabel = computed(() => {
+  if (props.aborting) return '终止中'
+  return props.canAbort ? '终止' : '发送'
+})
+
+const primaryActionType = computed<'primary' | 'danger'>(() => {
+  return props.canAbort ? 'danger' : 'primary'
+})
+
+const primaryActionDisabled = computed(() => {
+  return props.canAbort ? props.aborting : submitDisabled.value
+})
+
+const showRunningState = computed(() => props.canAbort || props.aborting)
+
 const slashMatch = computed(() => {
   const match = draftModel.value.match(/(^|\s)(\/[^\s]*)$/)
   if (!match) return null
@@ -600,6 +613,17 @@ function submit(): void {
   // 清空输入
   emit('update:draft', '')
   attachments.value = []
+}
+
+function handlePrimaryAction(): void {
+  if (props.canAbort) {
+    if (!props.aborting) {
+      emit('abort')
+    }
+    return
+  }
+
+  submit()
 }
 
 watch(
@@ -884,6 +908,58 @@ function handleKeydown(event: KeyboardEvent): void {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.primary-action-btn {
+  min-width: 110px;
+}
+
+.primary-action-content {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.primary-action-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.primary-action-indicator span {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: currentColor;
+  opacity: 0.3;
+  animation: primary-action-pulse 1.1s infinite ease-in-out;
+}
+
+.primary-action-indicator span:nth-child(2) {
+  animation-delay: 0.16s;
+}
+
+.primary-action-indicator span:nth-child(3) {
+  animation-delay: 0.32s;
+}
+
+.primary-action-btn--running:not(.is-disabled) {
+  box-shadow: 0 0 0 1px rgba(220, 38, 38, 0.08), 0 0 0 6px rgba(248, 113, 113, 0.12);
+}
+
+@keyframes primary-action-pulse {
+  0%,
+  80%,
+  100% {
+    transform: scale(0.72);
+    opacity: 0.3;
+  }
+
+  40% {
+    transform: scale(1);
+    opacity: 1;
+  }
 }
 
 @media (max-width: 720px) {

@@ -20,6 +20,7 @@ const props = defineProps<{
   messageCount: number
   streamState: ChatStreamState
   sending: boolean
+  running: boolean
   aborting: boolean
   modelLabel: string
   effortLabel: string
@@ -28,15 +29,16 @@ const props = defineProps<{
 
 const stateLabel = computed(() => {
   if (props.aborting) return '中断中'
-  if (props.sending || props.streamState === 'connected') return '响应中'
+  if (props.running || props.sending) return '响应中'
   if (props.streamState === 'idle') return '空闲'
+  if (props.streamState === 'connected') return '已连接'
   if (props.streamState === 'connecting') return '连接中'
   return '就绪'
 })
 
 const stateBadgeClass = computed(() => {
   if (props.aborting) return 'state-badge--warn'
-  if (props.sending || props.streamState === 'connected') return 'state-badge--active'
+  if (props.running || props.sending) return 'state-badge--active'
   return 'state-badge--idle'
 })
 </script>
