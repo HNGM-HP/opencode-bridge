@@ -1,5 +1,5 @@
-import { feishuClient } from './client.js';
 import { buildStreamCard } from './cards-stream.js';
+import { feishuClient } from './client.js';
 
 export interface StreamState {
   text: string;
@@ -15,6 +15,7 @@ export interface StreamState {
 export class CardStreamer {
   private chatId: string;
   private messageId: string | null = null;
+  private finalMessageId: string | null = null;
   private state: StreamState = {
     text: '',
     thinking: '',
@@ -24,6 +25,7 @@ export class CardStreamer {
   private lastUpdate: number = 0;
   private throttleMs: number = 500;
   private pendingUpdate: NodeJS.Timeout | null = null;
+  private finalDeliveryPromise: Promise<void> | null = null;
 
   constructor(chatId: string) {
     this.chatId = chatId;
@@ -90,6 +92,21 @@ export class CardStreamer {
     this.lastUpdate = Date.now();
     const card = this.buildCard();
     await feishuClient.updateCard(this.messageId, card);
+
+    if (this.state.status !== 'processing' && !this.finalMessageId && !this.finalDeliveryPromise) {
+      this.finalDeliveryPromise = (async () => {
+        try {
+          const finalMessageId = await feishuClient.sendCard(this.chatId, card);
+          if (finalMessageId) {
+            this.finalMessageId = finalMessageId;
+          }
+        } finally {
+          this.finalDeliveryPromise = null;
+        }
+      })();
+
+      await this.finalDeliveryPromise;
+    }
   }
 
   private buildCard(): object {
