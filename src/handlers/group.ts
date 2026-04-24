@@ -8,6 +8,7 @@ import { parseCommand } from '../commands/parser.js';
 import { normalizeEffortLevel, KNOWN_EFFORT_LEVELS, type EffortLevel } from '../commands/effort.js';
 import { commandHandler } from './command.js';
 import { modelConfig, attachmentConfig } from '../config.js';
+import { visionPreprocessConfig } from '../config/platform.js';
 import { DirectoryPolicy } from '../utils/directory-policy.js';
 import { buildSessionTimestamp } from '../utils/session-title.js';
 import { buildStreamCard } from '../feishu/cards-stream.js';
@@ -399,21 +400,9 @@ export class GroupHandler {
         parts.push({ type: 'text', text: effectiveText });
       }
 
-      if (attachments && attachments.length > 0) {
-        const prepared = await this.prepareAttachmentParts(messageId, attachments);
-        if (prepared.warnings.length > 0) {
-          await feishuClient.reply(messageId, `⚠️ 附件警告:\n${prepared.warnings.join('\n')}`);
-        }
-        parts.push(...prepared.parts);
-      }
-
-      if (parts.length === 0) {
-        await feishuClient.reply(messageId, '未检测到有效内容');
-        outputBuffer.setStatus(`chat:${chatId}`, 'completed');
-        return;
-      }
-
-      // 提取 providerId 和 modelId
+      // ── 提前解析 providerId/modelId/directory ──
+      // prepareAttachmentParts 需要这些上下文来判断主模型是否支持 image 输入，
+      // 并在不支持时把图片交给 opencode 内的多模态 model 做 OCR（见 vision-ocr 服务）。
       let providerId: string | undefined;
       let modelId: string | undefined;
 
@@ -434,6 +423,41 @@ export class GroupHandler {
             modelId = config.preferredModel;
           }
         }
+      }
+
+      // 从 store 获取会话的工作目录，作为 OCR 临时 session 的上下文
+      const sessionData = chatSessionStore.getSession(chatId);
+      let directory = sessionData?.resolvedDirectory;
+      if (!directory) {
+        try {
+          const storeKnownDirs = chatSessionStore.getKnownDirectories();
+          const sessions = await opencodeClient.listAllSessions(storeKnownDirs);
+          const matched = sessions.find(s => s.id === sessionId);
+          if (matched?.directory) {
+            directory = matched.directory;
+            chatSessionStore.updateResolvedDirectory(chatId, directory);
+          }
+        } catch (error) {
+          console.debug('[Group] 获取会话目录失败，将使用默认目录:', error instanceof Error ? error.message : String(error));
+        }
+      }
+
+      if (attachments && attachments.length > 0) {
+        const prepared = await this.prepareAttachmentParts(messageId, attachments, {
+          providerId,
+          modelId,
+          directory,
+        });
+        if (prepared.warnings.length > 0) {
+          await feishuClient.reply(messageId, `⚠️ 附件警告:\n${prepared.warnings.join('\n')}`);
+        }
+        parts.push(...prepared.parts);
+      }
+
+      if (parts.length === 0) {
+        await feishuClient.reply(messageId, '未检测到有效内容');
+        outputBuffer.setStatus(`chat:${chatId}`, 'completed');
+        return;
       }
 
       // 异步触发 OpenCode 请求，后续输出通过事件流持续推送
@@ -490,25 +514,6 @@ export class GroupHandler {
         }
       }
 
-      // 从 store 获取会话的工作目录，传递给 OpenCode 以切换 Instance 上下文
-      const sessionData = chatSessionStore.getSession(chatId);
-      let directory = sessionData?.resolvedDirectory;
-      // 如果 store 没有记录（老会话），尝试从 OpenCode 聚合查询并回写缓存
-      if (!directory) {
-        try {
-          const storeKnownDirs = chatSessionStore.getKnownDirectories();
-          const sessions = await opencodeClient.listAllSessions(storeKnownDirs);
-          const matched = sessions.find(s => s.id === sessionId);
-          if (matched?.directory) {
-            directory = matched.directory;
-            // 回写缓存，后续消息不再重复查询
-            chatSessionStore.updateResolvedDirectory(chatId, directory);
-          }
-        } catch (error) {
-          // 获取失败不阻塞消息发送，但记录调试日志
-          console.debug('[Group] 获取会话目录失败，将使用默认目录:', error instanceof Error ? error.message : String(error));
-        }
-      }
       await opencodeClient.sendMessagePartsAsync(
         sessionId,
         parts,
@@ -544,12 +549,30 @@ export class GroupHandler {
   // 处理附件
   private async prepareAttachmentParts(
     messageId: string,
-    attachments: FeishuAttachment[]
-  ): Promise<{ parts: OpencodeFilePartInput[]; warnings: string[] }> {
-    const parts: OpencodeFilePartInput[] = [];
+    attachments: FeishuAttachment[],
+    ctx?: { providerId?: string; modelId?: string; directory?: string }
+  ): Promise<{ parts: OpencodePartInput[]; warnings: string[] }> {
+    const parts: OpencodePartInput[] = [];
     const warnings: string[] = [];
 
     await fs.mkdir(ATTACHMENT_BASE_DIR, { recursive: true }).catch(() => undefined);
+
+    // ── 能力嗅探：一次性查主模型是否支持 image 输入 ──
+    // 仅在满足"功能开关 ON + 知道 provider/model"时触发嗅探；
+    // 若嗅探返回 null（拉取失败或未找到），按用户要求采取"乐观假设支持图片"策略。
+    let mainModelSupportsImage = true;
+    if (
+      visionPreprocessConfig.enabled &&
+      ctx?.providerId &&
+      ctx?.modelId &&
+      visionPreprocessConfig.model // 也必须配置好了 OCR 副模型才有意义去嗅探
+    ) {
+      const caps = await opencodeClient.getModelCapabilities(ctx.providerId, ctx.modelId);
+      if (caps && caps.input && typeof caps.input.image === 'boolean') {
+        mainModelSupportsImage = caps.input.image;
+      }
+      // caps === null → 乐观保持 mainModelSupportsImage = true
+    }
 
     for (const attachment of attachments) {
         if (attachment.fileSize && attachment.fileSize > attachmentConfig.maxSize) {
@@ -568,7 +591,7 @@ export class GroupHandler {
         const extFromType = attachment.fileType ? normalizeExtension(attachment.fileType) : '';
         const extFromContent = contentType ? extensionFromContentType(contentType) : '';
         let ext = normalizeExtension(extFromName || extFromType || extFromContent);
-        
+
         if (!ext && attachment.type === 'image') {
             ext = '.jpg';
         }
@@ -588,14 +611,47 @@ export class GroupHandler {
             await resource.writeFile(filePath);
             const buffer = await fs.readFile(filePath);
             const base64 = buffer.toString('base64');
-            
+
             let mime = contentType ? contentType.split(';')[0].trim() : '';
             if (!mime || mime === 'application/octet-stream') {
                 mime = mimeFromExtension(ext);
             }
-            
+
             const dataUrl = `data:${mime};base64,${base64}`;
-            
+
+            // ── 图片 + 主模型不支持 image + 有 OCR 副模型 → 走预处理管道 ──
+            const isImage = attachment.type === 'image' || mime.startsWith('image/');
+            const shouldPreprocess =
+              isImage &&
+              !mainModelSupportsImage &&
+              visionPreprocessConfig.enabled &&
+              !!visionPreprocessConfig.model;
+
+            if (shouldPreprocess) {
+                try {
+                    const { ocrImageViaOpencode } = await import('../services/vision-ocr.js');
+                    const ocrText = await ocrImageViaOpencode({
+                        imageDataUrl: dataUrl,
+                        mime,
+                        filename: safeName,
+                        directory: ctx?.directory,
+                    });
+
+                    if (ocrText) {
+                        // 成功：把图片替换为描述文本，彻底避免把 file part 发给不支持图片的主模型
+                        parts.push({
+                            type: 'text',
+                            text: `[图片 ${safeName} 内容描述]\n${ocrText}`,
+                        });
+                        continue; // 跳过下面的 file part push
+                    }
+                    // OCR 失败 → 按用户要求降级为"直发原图"，让 opencode/模型自己报错
+                    console.warn(`[Group] 图片 ${safeName} OCR 失败，降级为直发原图`);
+                } catch (err) {
+                    console.warn(`[Group] 图片 ${safeName} OCR 异常，降级为直发原图:`, err instanceof Error ? err.message : err);
+                }
+            }
+
             parts.push({
                 type: 'file',
                 mime,

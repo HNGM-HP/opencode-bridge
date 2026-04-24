@@ -112,6 +112,53 @@
           </el-col>
         </el-row>
       </el-card>
+
+      <el-card class="config-card">
+        <template #header>
+          <div class="card-header-row">
+            <span class="card-title">🖼️ 非多模态模型图片预处理</span>
+            <el-switch v-model="visionPreprocess"
+              active-text="启用" inactive-text="关闭"
+              @change="form.IMAGE_VISION_PREPROCESS = visionPreprocess ? 'true' : 'false'" />
+          </div>
+        </template>
+        <el-alert type="info" :closable="false" show-icon style="margin-bottom:16px">
+          当主模型不支持图片输入时，Bridge 自动借用下方指定的<strong>多模态 model</strong> 做 OCR / 图片描述，
+          把识别结果作为文本注入后转发给主模型；主模型本身支持图片则直接透传，不走此路径。
+          OCR 失败会自动降级为"直发原图"保持原有行为。
+        </el-alert>
+
+        <el-form-item label="OCR 模型（VISION_OCR_MODEL）">
+          <el-select v-model="form.VISION_OCR_MODEL"
+            placeholder="请选择支持图片输入的模型"
+            filterable clearable
+            :disabled="!visionPreprocess"
+            style="width:100%"
+            @visible-change="handleVisionSelectVisible">
+            <el-option
+              v-for="m in visionModels"
+              :key="`${m.providerID}/${m.modelID}`"
+              :label="`${m.providerName} · ${m.modelName}`"
+              :value="`${m.providerID}/${m.modelID}`"
+            />
+          </el-select>
+          <div class="field-tip">
+            下拉选项来自 opencode 已配置的、capabilities.input.image 为 true 的 model。
+            如列表为空，请先在 opencode 的 provider 配置中启用任一多模态模型。
+          </div>
+        </el-form-item>
+
+        <el-form-item label="OCR 引导提示词（VISION_OCR_PROMPT）">
+          <el-input
+            v-model="form.VISION_OCR_PROMPT"
+            type="textarea"
+            :rows="4"
+            :disabled="!visionPreprocess"
+            :placeholder="defaultVisionOcrPrompt"
+          />
+          <div class="field-tip">留空将使用默认提示词。建议要求模型输出中文、尽量完整转录文字与图表结构。</div>
+        </el-form-item>
+      </el-card>
     </el-form>
       </div>
 
@@ -130,7 +177,8 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import type { BridgeSettings } from '../api'
+import type { BridgeSettings, ChatVisionModelInfo } from '../api'
+import { chatApi } from '../api'
 import { useConfigStore } from '../stores/config'
 import ConfigActionBar from '../components/ConfigActionBar.vue'
 
@@ -141,6 +189,12 @@ const autoStartForeground = ref(false)
 const portNum = ref(4096)
 const selectedProvider = ref('')
 const currentModels = ref<string[]>([])
+
+// Vision OCR 预处理相关
+const visionPreprocess = ref(false)
+const visionModels = ref<ChatVisionModelInfo[]>([])
+const visionModelsLoaded = ref(false)
+const defaultVisionOcrPrompt = '请详细描述这张图片的内容，包括所有可见的文字、表格、结构、人物和关键视觉信息。输出中文描述。'
 
 // 从 store 获取模型列表（启动时已加载）
 const providers = computed(() => store.modelProviders)
@@ -155,12 +209,31 @@ const form = reactive({
   OPENCODE_CONFIG_FILE: '',
   DEFAULT_PROVIDER: '',
   DEFAULT_MODEL: '',
+  IMAGE_VISION_PREPROCESS: 'false',
+  VISION_OCR_MODEL: '',
+  VISION_OCR_PROMPT: '',
 })
 
 onMounted(() => {
   syncFromStore()
   initModelSelection()
+  loadVisionModels()
 })
+
+async function loadVisionModels(force = false) {
+  if (visionModelsLoaded.value && !force) return
+  try {
+    visionModels.value = await chatApi.listVisionModels()
+    visionModelsLoaded.value = true
+  } catch (error) {
+    console.warn('[OpenCode.vue] 获取多模态模型列表失败', error)
+    visionModels.value = []
+  }
+}
+
+function handleVisionSelectVisible(visible: boolean) {
+  if (visible) loadVisionModels(true)
+}
 
 watch(() => store.settings, () => syncFromStore(), { deep: true })
 
@@ -193,10 +266,14 @@ function syncFromStore() {
     OPENCODE_CONFIG_FILE: s.OPENCODE_CONFIG_FILE || '',
     DEFAULT_PROVIDER: s.DEFAULT_PROVIDER || '',
     DEFAULT_MODEL: s.DEFAULT_MODEL || '',
+    IMAGE_VISION_PREPROCESS: s.IMAGE_VISION_PREPROCESS || 'false',
+    VISION_OCR_MODEL: s.VISION_OCR_MODEL || '',
+    VISION_OCR_PROMPT: s.VISION_OCR_PROMPT || '',
   })
   portNum.value = parseInt(form.OPENCODE_PORT) || 4096
   autoStart.value = form.OPENCODE_AUTO_START === 'true'
   autoStartForeground.value = form.OPENCODE_AUTO_START_FOREGROUND === 'true'
+  visionPreprocess.value = form.IMAGE_VISION_PREPROCESS === 'true'
   initModelSelection()
 }
 
@@ -224,6 +301,7 @@ function handleImportConfig(config: BridgeSettings) {
   portNum.value = parseInt(form.OPENCODE_PORT) || 4096
   autoStart.value = form.OPENCODE_AUTO_START === 'true'
   autoStartForeground.value = form.OPENCODE_AUTO_START_FOREGROUND === 'true'
+  visionPreprocess.value = form.IMAGE_VISION_PREPROCESS === 'true'
   initModelSelection()
 }
 </script>

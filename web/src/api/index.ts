@@ -133,6 +133,10 @@ export interface BridgeSettings {
   ROUTER_MODE?: string
   DEFAULT_PROVIDER?: string
   DEFAULT_MODEL?: string
+  // 非多模态模型图片预处理（OCR 回退）
+  IMAGE_VISION_PREPROCESS?: string
+  VISION_OCR_MODEL?: string
+  VISION_OCR_PROMPT?: string
 }
 
 export interface SaveConfigResult {
@@ -401,6 +405,13 @@ export interface ChatModelProviderInfo {
   id: string
   name: string
   models: ChatModelOption[]
+}
+
+export interface ChatVisionModelInfo {
+  providerID: string
+  providerName: string
+  modelID: string
+  modelName: string
 }
 
 export interface ChatTokenUsage {
@@ -1080,6 +1091,11 @@ export const chatApi = {
   async listModels(): Promise<ChatModelProviderInfo[]> {
     const res = await http.get<{ providers: ChatModelProviderInfo[] }>('/chat/models')
     return Array.isArray(res.data.providers) ? res.data.providers : []
+  },
+
+  async listVisionModels(): Promise<ChatVisionModelInfo[]> {
+    const res = await http.get<{ models: ChatVisionModelInfo[] }>('/chat/vision-models')
+    return Array.isArray(res.data.models) ? res.data.models : []
   },
 
   async listCommands(): Promise<ChatCommandInfo[]> {

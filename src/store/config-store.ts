@@ -187,6 +187,11 @@ export interface BridgeSettings {
   // 附件
   ATTACHMENT_MAX_SIZE?: string;
 
+  // 非多模态模型图片预处理（借用 opencode 内已配置的多模态 model 做 OCR）
+  IMAGE_VISION_PREPROCESS?: string;     // 'true' | 'false'
+  VISION_OCR_MODEL?: string;            // 'providerID/modelID'
+  VISION_OCR_PROMPT?: string;           // OCR 引导提示词
+
   // 模型（扩展字段，.env.example 未列出但 config.ts 引用）
   DEFAULT_PROVIDER?: string;
   DEFAULT_MODEL?: string;

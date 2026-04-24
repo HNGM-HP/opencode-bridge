@@ -295,6 +295,39 @@ export const attachmentConfig = {
   get maxSize() { return parseInt(process.env.ATTACHMENT_MAX_SIZE || String(50 * 1024 * 1024), 10); },
 };
 
+/**
+ * 默认 OCR 提示词（仅当用户未配置 VISION_OCR_PROMPT 时使用）
+ */
+export const DEFAULT_VISION_OCR_PROMPT =
+  '请详细描述这张图片的内容，包括所有可见的文字、表格、结构、人物和关键视觉信息。输出中文描述。';
+
+/**
+ * 非多模态模型图片预处理配置
+ *
+ * 当主模型不支持 image 输入时，bridge 借用 opencode 内已配置的多模态 model
+ * 做 OCR / 图片描述，把结果注入为 text part 后再转发给主模型。
+ *
+ * 这三个字段都通过 SQLite + Web UI 维护，不走 .env。
+ */
+export const visionPreprocessConfig = {
+  /** 功能总开关 */
+  get enabled() { return parseBooleanEnv(process.env.IMAGE_VISION_PREPROCESS, false); },
+  /** 存储格式："providerID/modelID"，空串代表未配置 */
+  get modelRef() { return process.env.VISION_OCR_MODEL?.trim() || ''; },
+  /** 解析后的 provider/model 对，未配置返回 undefined */
+  get model(): { providerID: string; modelID: string } | undefined {
+    const raw = this.modelRef;
+    if (!raw) return undefined;
+    const slash = raw.indexOf('/');
+    if (slash <= 0 || slash === raw.length - 1) return undefined;
+    const providerID = raw.slice(0, slash).trim();
+    const modelID = raw.slice(slash + 1).trim();
+    if (!providerID || !modelID) return undefined;
+    return { providerID, modelID };
+  },
+  get prompt() { return process.env.VISION_OCR_PROMPT?.trim() || DEFAULT_VISION_OCR_PROMPT; },
+};
+
 function parseProjectAliases(value: string | undefined): Record<string, string> {
   if (!value) return {};
   try {

@@ -354,6 +354,17 @@ export function registerChatMetaRoutes(app: Application): void {
     }
   });
 
+  // 列出所有支持 image 输入的 model（供 VISION_OCR_MODEL 下拉选择器使用）
+  router.get('/vision-models', async (_req: Request, res: Response) => {
+    try {
+      const models = await opencodeClient.listVisionModels();
+      res.json({ models });
+    } catch (error) {
+      console.error('[Chat API] 获取多模态模型列表失败:', error);
+      res.status(502).json({ error: errorMsg(error) });
+    }
+  });
+
   router.get('/commands', async (_req: Request, res: Response) => {
     try {
       const commands = (await opencodeClient.getCommands())
