@@ -6,7 +6,7 @@ import { createAdminServer } from './admin/admin-server.js';
 import { feishuClient, type FeishuMessageEvent } from './feishu/client.js';
 // 平台适配器动态加载，不再静态导入
 import type { PlatformSender, PlatformAdapter } from './platform/types.js';
-import { loadAllConfigured, getSenderByPlatform, getCachedAdapter, getConfiguredPlatforms } from './platform/loader.js';
+import { loadAllConfigured, getSenderByPlatform, getCachedAdapter, getConfiguredPlatforms, clearCache } from './platform/loader.js';
 import { opencodeClient, type PermissionRequestEvent } from './opencode/client.js';
 import { streamStateManager, type ToolRuntimeState, type TimelineSegment, type StreamTimelineState } from './store/stream-state.js';
 import { buildTelegramText, buildPortableUpdateText, buildPortableUpdatePayload } from './utils/text-builder.js';
@@ -1585,15 +1585,17 @@ async function main() {
   const reliabilityLifecycle = bootstrapReliabilityLifecycle();
 
   // 4. 监听飞书消息（通过路由器分发）
-  feishuClient.on('message', async (event) => {
+  const onFeishuMessage = async (event: FeishuMessageEvent) => {
     await reliabilityLifecycle.onInboundMessage();
     await rootRouter.onMessage(event);
-  });
+  };
+  feishuClient.on('message', onFeishuMessage);
 
-  feishuClient.on('chatUnavailable', (chatId: string) => {
+  const onFeishuChatUnavailable = (chatId: string) => {
     console.warn(`[Index] 检测到不可用群聊，移除会话绑定: ${chatId}`);
     chatSessionStore.removeSession(chatId);
-  });
+  };
+  feishuClient.on('chatUnavailable', onFeishuChatUnavailable);
 
   // 5. 监听飞书卡片动作（通过路由器分发）
   feishuClient.setCardActionHandler(async (event) => {
@@ -1967,6 +1969,21 @@ async function main() {
       questionHandler.cleanupExpired(0);
     } catch (e) {
       console.error('[System] 清理资源失败:', e);
+    }
+
+    // 7. 清理本轮 main() 注册到 feishuClient 的 EventEmitter 监听，避免 embedded restart 叠加
+    try {
+      feishuClient.off('message', onFeishuMessage);
+      feishuClient.off('chatUnavailable', onFeishuChatUnavailable);
+    } catch (e) {
+      console.error('[飞书] 清理事件监听失败:', e);
+    }
+
+    // 8. 清理平台适配器缓存，避免重启后复用旧实例导致 callback 累积
+    try {
+      clearCache();
+    } catch (e) {
+      console.error('[PlatformLoader] 清理适配器缓存失败:', e);
     }
 
     if (isEmbeddedStop) {

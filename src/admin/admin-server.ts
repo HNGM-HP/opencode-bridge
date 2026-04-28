@@ -413,16 +413,16 @@ export function createAdminServer(options: AdminServerOptions): { start: () => v
       return;
     }
 
-    res.json({ ok: true, message: '正在重启 Bridge 服务...' });
+    const result = await bridgeManager.restart();
 
-    // 异步重启，不阻塞响应
-    bridgeManager.restart().then(result => {
-      if (result.success) {
-        console.log(`[Admin] Bridge 重启成功，PID=${result.pid}`);
-      } else {
-        console.error(`[Admin] Bridge 重启失败: ${result.error}`);
-      }
-    });
+    if (result.success) {
+      console.log(`[Admin] Bridge 重启成功，PID=${result.pid}`);
+      res.json({ ok: true, pid: result.pid, message: 'Bridge 重启成功' });
+      return;
+    }
+
+    console.error(`[Admin] Bridge 重启失败: ${result.error}`);
+    res.status(500).json({ error: result.error || '重启失败' });
   });
 
   // ── POST /api/admin/stop-bridge（仅停止 Bridge 进程）
