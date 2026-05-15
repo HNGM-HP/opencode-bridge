@@ -87,7 +87,9 @@ describe('Resources API - Skills Endpoints', () => {
         .get('/api/resources/skills')
         .expect(200);
 
-      expect(response.body).toEqual({ resources: mockSkills });
+      expect(response.body.resources).toHaveLength(1);
+      expect(response.body.resources[0]).toMatchObject(mockSkills[0]);
+      expect(response.body.resources[0].status).toBe('enabled');
       expect(skillRegistry.list).toHaveBeenCalledTimes(1);
     });
 
@@ -272,7 +274,12 @@ describe('Resources API - MCP Endpoints', () => {
         .get('/api/resources/mcp')
         .expect(200);
 
-      expect(response.body).toEqual({ resources: mockServers });
+      expect(response.body.resources).toHaveLength(1);
+      expect(response.body.resources[0]).toMatchObject({
+        name: 'test-server',
+        transport: 'stdio',
+        enabled: true,
+      });
     });
   });
 
@@ -399,7 +406,12 @@ describe('Resources API - Agents Endpoints', () => {
         .get('/api/resources/agents')
         .expect(200);
 
-      expect(response.body).toEqual({ resources: mockAgents });
+      expect(response.body.resources).toHaveLength(1);
+      expect(response.body.resources[0]).toMatchObject({
+        name: 'test-agent',
+        description: 'Test',
+        enabled: true,
+      });
     });
   });
 
@@ -450,6 +462,10 @@ describe('Resources API - Providers Endpoints', () => {
       refreshModels: vi.fn(),
       getModels: vi.fn(),
       getAllModels: vi.fn(),
+      getCustom: vi.fn(),
+      upsertCustomProvider: vi.fn(),
+      disconnect: vi.fn(),
+      setModelVisibility: vi.fn(),
     };
     vi.mocked(getProviderRegistry).mockReturnValue(mockProviderRegistry);
   });
@@ -465,7 +481,13 @@ describe('Resources API - Providers Endpoints', () => {
         .get('/api/resources/providers')
         .expect(200);
 
-      expect(response.body).toEqual({ resources: mockProviders });
+      expect(response.body.resources).toHaveLength(1);
+      expect(response.body.resources[0]).toMatchObject({
+        id: 'openai',
+        name: 'openai',
+        type: 'api',
+        configured: true,
+      });
     });
   });
 
@@ -526,6 +548,73 @@ describe('Resources API - Providers Endpoints', () => {
         providerId: 'openai',
         models: mockModels,
       });
+    });
+  });
+
+  describe('GET /api/resources/models', () => {
+    it('应返回 200 和模型可见性列表', async () => {
+      const mockModels = [{ providerId: 'openai', modelId: 'gpt-4', visible: true }];
+      mockProviderRegistry.getAllModels.mockReturnValue(mockModels);
+
+      const response = await request(app)
+        .get('/api/resources/models')
+        .expect(200);
+
+      expect(response.body.models).toEqual(mockModels);
+    });
+  });
+
+  describe('POST /api/resources/models/:providerId/:modelId/visibility', () => {
+    it('应更新模型可见性', async () => {
+      mockProviderRegistry.setModelVisibility.mockResolvedValue(undefined);
+
+      const response = await request(app)
+        .post('/api/resources/models/openai/gpt-4/visibility')
+        .send({ visible: false })
+        .expect(200);
+
+      expect(response.body.ok).toBe(true);
+      expect(mockProviderRegistry.setModelVisibility).toHaveBeenCalledWith('openai', 'gpt-4', false);
+    });
+
+    it('应在 visible 非 boolean 时返回 400', async () => {
+      await request(app)
+        .post('/api/resources/models/openai/gpt-4/visibility')
+        .send({ visible: 'false' })
+        .expect(400);
+    });
+  });
+
+  describe('POST /api/resources/providers/custom', () => {
+    it('应创建自定义 Provider', async () => {
+      mockProviderRegistry.upsertCustomProvider.mockResolvedValue(undefined);
+      const body = {
+        providerId: 'custom-openai',
+        name: 'Custom OpenAI',
+        baseURL: 'https://api.example.com/v1',
+        models: [{ id: 'model-a', name: 'Model A' }],
+      };
+
+      const response = await request(app)
+        .post('/api/resources/providers/custom')
+        .send(body)
+        .expect(201);
+
+      expect(response.body.ok).toBe(true);
+      expect(mockProviderRegistry.upsertCustomProvider).toHaveBeenCalledWith(body);
+    });
+  });
+
+  describe('POST /api/resources/providers/:id/disconnect', () => {
+    it('应断开 Provider', async () => {
+      mockProviderRegistry.disconnect.mockResolvedValue(undefined);
+
+      const response = await request(app)
+        .post('/api/resources/providers/openai/disconnect')
+        .expect(200);
+
+      expect(response.body.ok).toBe(true);
+      expect(mockProviderRegistry.disconnect).toHaveBeenCalledWith('openai');
     });
   });
 });

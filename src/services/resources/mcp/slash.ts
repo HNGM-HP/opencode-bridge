@@ -111,11 +111,22 @@ export function toCommandItems(commands: MCPSlashCommand[]): Array<{
   template: string;
   hints: string[];
 }> {
-  return commands.map(cmd => ({
+  const items = commands.map(cmd => ({
     name: cmd.name,
     description: cmd.description,
     source: 'mcp' as const,
     template: cmd.name,
     hints: cmd.args || [],
   }));
+
+  return [
+    {
+      name: '/mcp',
+      description: '查看可用 MCP prompts',
+      source: 'mcp' as const,
+      template: '/mcp',
+      hints: [],
+    },
+    ...items,
+  ];
 }

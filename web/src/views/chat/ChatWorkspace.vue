@@ -952,6 +952,7 @@ async function handleSubmit(payload: {
     modelId: payload.modelId,
     variant: payload.variant,
     agent: payload.agent,
+    directory: workspaceDirectory.value || undefined,
   })
 }
 

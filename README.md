@@ -1,6 +1,6 @@
 # OpenCode Bridge
 
-[![v3.1.0](https://img.shields.io/badge/v3.1.0-760031c)](https://github.com/HNGM-HP/opencode-bridge/blob/main)
+[![v3.1.1](https://img.shields.io/badge/v3.1.1-760031c)](https://github.com/HNGM-HP/opencode-bridge/blob/main)
 [![Node.js >= 20](https://img.shields.io/badge/Node.js-%3E%3D20-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![License: GPLv3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
@@ -409,6 +409,21 @@ Microsoft Defender SmartScreen 筛选器已阻止无法识别的应用启动
 | `/project list` | 列出可用项目 |
 | `/clear` | 重置对话上下文 |
 
+### 资源管理
+
+Web 管理面板提供一级菜单「资源管理」，入口为 `/resources`，用于管理 Skills、MCP Servers、Agents 与 Providers。
+
+CLI 可使用以下命令管理同类资源：
+
+| 命令 | 说明 |
+|------|------|
+| `opencode-bridge bridge resource skill ...` | 管理 Skill：list/create/edit/enable/disable/delete |
+| `opencode-bridge bridge resource mcp ...` | 管理 MCP：list/add/edit/enable/disable/delete |
+| `opencode-bridge bridge resource agent ...` | 管理 Agent：list/create/edit/delete |
+| `opencode-bridge bridge resource model ...` | 管理 Provider/Model：providers/set-key/remove-key/models/login/logout |
+
+飞书侧 Agent 创建/管理入口已迁移到资源管理；请优先使用 Web `/resources` 或上述 CLI。
+
 ### 飞书专属命令
 
 | 命令 | 说明 |
@@ -522,4 +537,3 @@ Microsoft Defender SmartScreen 筛选器已阻止无法识别的应用启动
 本项目采用 [GNU General Public License v3.0](./LICENSE)。
 
 ---
-

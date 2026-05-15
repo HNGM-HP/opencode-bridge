@@ -43,12 +43,50 @@ export interface ProviderSummary {
   editable: boolean;
   /** 供应商显示名称（从 opename 映射，可选） */
   displayName?: string;
+  source?: 'api' | 'oauth' | 'custom' | 'config' | 'models';
+  disabled?: boolean;
+  models?: string[];
+  modelCount?: number;
+}
+
+export interface CustomProviderModelConfig {
+  name: string;
+}
+
+export interface CustomProviderConfig {
+  npm: '@ai-sdk/openai-compatible';
+  name: string;
+  options: {
+    baseURL: string;
+    headers?: Record<string, string>;
+  };
+  models: Record<string, CustomProviderModelConfig>;
+}
+
+export interface ProviderOverridesConfig {
+  providers: Record<string, CustomProviderConfig>;
+  disabledProviders: string[];
+  hiddenModels: Record<string, string[]>;
+}
+
+export interface CustomProviderInput {
+  providerId: string;
+  name: string;
+  baseURL: string;
+  apiKey?: string;
+  envKey?: string;
+  models: Array<{ id: string; name: string }>;
+  headers?: Record<string, string>;
 }
 
 /** 模型信息 */
 export interface ModelInfo {
   providerId: string;
   modelId: string;
+  name?: string;
+  providerName?: string;
+  visible?: boolean;
+  custom?: boolean;
   /** 完整模型标识符（provider/model） */
   fullName: string;
 }

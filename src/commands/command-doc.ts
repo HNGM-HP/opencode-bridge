@@ -28,6 +28,7 @@ export async function writeCommandDoc(data: CommandDocData): Promise<string> {
     { key: 'command', title: '内置命令' },
     { key: 'mcp', title: 'MCP 命令' },
     { key: 'skill', title: '技能命令' },
+    { key: 'agent', title: 'Agent 命令' },
     { key: 'other', title: '其他' },
   ];
 

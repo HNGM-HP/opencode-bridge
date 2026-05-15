@@ -11,11 +11,10 @@
 </template>
 
 <script setup lang="ts">
-import { defineAsyncComponent, onBeforeUnmount, ref, watch } from 'vue'
+import { onBeforeUnmount, ref, watch } from 'vue'
+import Markdown from '../../components/ai-elements/Markdown.vue'
+import CodeBlock from '../../components/ai-elements/CodeBlock.vue'
 import { splitMarkdownSegments, type MarkdownSegment } from '../../components/ai-elements/markdown-utils'
-
-const Markdown = defineAsyncComponent(() => import('../../components/ai-elements/Markdown.vue'))
-const CodeBlock = defineAsyncComponent(() => import('../../components/ai-elements/CodeBlock.vue'))
 
 const props = defineProps<{
   text: string

@@ -18,11 +18,165 @@ import { getMCPRegistry } from '../../services/resources/mcp/manager.js';
 import { getAgentRegistry } from '../../services/resources/agents/manager.js';
 import { getProviderRegistry } from '../../services/resources/providers/manager.js';
 import { onResourceChange } from '../../services/resources/events.js';
+import { opencodeConfig } from '../../config.js';
 import type { ResourceScope } from '../../services/resources/types.js';
 import type { SkillSlashCommand } from '../../services/resources/skills/registry.js';
-import type { MCPServerConfig, MCPInput } from '../../services/resources/mcp/types.js';
+import type { MCPServerConfig, MCPInput, MCPServerSummary } from '../../services/resources/mcp/types.js';
 import type { AgentConfig, AgentInput } from '../../services/resources/agents/types.js';
 import type { ProviderConfig } from '../../services/resources/providers/types.js';
+
+type OpenCodeMCPStatus =
+  | { status: 'connected' }
+  | { status: 'disabled' }
+  | { status: 'failed'; error: string }
+  | { status: 'needs_auth' }
+  | { status: 'needs_client_registration'; error: string };
+
+interface OpenCodeProviderModel {
+  id: string;
+  name: string;
+}
+
+interface OpenCodeProviderSummary {
+  id: string;
+  name: string;
+  source?: string;
+  models: OpenCodeProviderModel[];
+  connected: boolean;
+}
+
+interface OpenCodeProviderList {
+  providers: OpenCodeProviderSummary[];
+  connected: Set<string>;
+}
+
+function opencodeAuthHeaders(headers?: Record<string, string>): Record<string, string> {
+  const merged = { ...(headers || {}) };
+  const password = opencodeConfig.serverPassword;
+  if (password) {
+    const username = opencodeConfig.serverUsername || 'opencode';
+    merged.Authorization = `Basic ${Buffer.from(`${username}:${password}`).toString('base64')}`;
+  }
+  return merged;
+}
+
+function appendDirectoryParam(url: URL, directory: unknown): void {
+  if (typeof directory === 'string' && directory.trim()) {
+    url.searchParams.set('directory', directory.trim());
+    return;
+  }
+  url.searchParams.set('directory', process.cwd());
+}
+
+async function requestOpenCodeMCPStatus(directory?: unknown): Promise<Record<string, OpenCodeMCPStatus>> {
+  const url = new URL('/mcp', opencodeConfig.baseUrl);
+  appendDirectoryParam(url, directory);
+  const response = await fetch(url, { headers: opencodeAuthHeaders() });
+  if (!response.ok) {
+    throw new Error(`OpenCode MCP status failed: HTTP ${response.status}`);
+  }
+  return await response.json() as Record<string, OpenCodeMCPStatus>;
+}
+
+async function requestOpenCodeMCPToggle(name: string, action: 'connect' | 'disconnect', directory?: unknown): Promise<boolean> {
+  const url = new URL(`/mcp/${encodeURIComponent(name)}/${action}`, opencodeConfig.baseUrl);
+  appendDirectoryParam(url, directory);
+  const response = await fetch(url, { method: 'POST', headers: opencodeAuthHeaders() });
+  if (!response.ok) {
+    throw new Error(`OpenCode MCP ${action} failed: HTTP ${response.status}`);
+  }
+  return await response.json() as boolean;
+}
+
+function toRecord(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  return value as Record<string, unknown>;
+}
+
+function extractOpenCodeModels(provider: Record<string, unknown>): OpenCodeProviderModel[] {
+  const models: OpenCodeProviderModel[] = [];
+  const seen = new Set<string>();
+  const rawModels = provider.models;
+
+  const pushModel = (rawModel: unknown, fallbackId?: string): void => {
+    const modelRecord = toRecord(rawModel);
+    const fallback = typeof fallbackId === 'string' ? fallbackId.trim() : '';
+    const id = typeof modelRecord?.id === 'string' && modelRecord.id.trim()
+      ? modelRecord.id.trim()
+      : fallback;
+    if (!id || seen.has(id.toLowerCase())) return;
+    seen.add(id.toLowerCase());
+    const name = typeof modelRecord?.name === 'string' && modelRecord.name.trim()
+      ? modelRecord.name.trim()
+      : id;
+    models.push({ id, name });
+  };
+
+  if (Array.isArray(rawModels)) {
+    for (const rawModel of rawModels) pushModel(rawModel);
+  } else {
+    const modelMap = toRecord(rawModels);
+    if (modelMap) {
+      for (const [modelId, rawModel] of Object.entries(modelMap)) pushModel(rawModel, modelId);
+    }
+  }
+
+  return models.sort((left, right) => left.name.localeCompare(right.name, 'zh-Hans-CN'));
+}
+
+async function requestOpenCodeProviders(): Promise<OpenCodeProviderList> {
+  const url = new URL('/provider', opencodeConfig.baseUrl);
+  const response = await fetch(url, { headers: opencodeAuthHeaders() });
+  if (!response.ok) {
+    throw new Error(`OpenCode provider list failed: HTTP ${response.status}`);
+  }
+
+  const data = await response.json() as Record<string, unknown>;
+  const rawProviders = Array.isArray(data.all)
+    ? data.all
+    : (Array.isArray(data.providers) ? data.providers : []);
+  const connected = new Set((Array.isArray(data.connected) ? data.connected : [])
+    .filter((id): id is string => typeof id === 'string' && id.trim().length > 0));
+
+  const providerEntries = rawProviders
+    .map((rawProvider): OpenCodeProviderSummary | null => {
+      const provider = toRecord(rawProvider);
+      const id = typeof provider?.id === 'string' && provider.id.trim() ? provider.id.trim() : '';
+      if (!provider || !id) return null;
+      const name = typeof provider.name === 'string' && provider.name.trim() ? provider.name.trim() : id;
+      const source = typeof provider.source === 'string' ? provider.source : undefined;
+      return {
+        id,
+        name,
+        source,
+        connected: connected.has(id),
+        models: extractOpenCodeModels(provider),
+      };
+    })
+    .filter((provider): provider is OpenCodeProviderSummary => Boolean(provider));
+
+  const providerById = new Map<string, OpenCodeProviderSummary>();
+  for (const provider of providerEntries) {
+    const existing = providerById.get(provider.id);
+    if (!existing) {
+      providerById.set(provider.id, provider);
+      continue;
+    }
+    const models = new Map(existing.models.map(model => [model.id, model]));
+    for (const model of provider.models) models.set(model.id, model);
+    providerById.set(provider.id, {
+      ...existing,
+      ...provider,
+      connected: existing.connected || provider.connected,
+      models: Array.from(models.values()).sort((left, right) => left.name.localeCompare(right.name, 'zh-Hans-CN')),
+    });
+  }
+
+  const providers = Array.from(providerById.values())
+    .sort((left, right) => left.name.localeCompare(right.name, 'zh-Hans-CN'));
+
+  return { providers, connected };
+}
 
 export function createResourcesRoutes(): express.Router {
   const router = express.Router();
@@ -71,7 +225,19 @@ export function createResourcesRoutes(): express.Router {
         skills = skills.filter((s) => s.scope === scope);
       }
 
-      res.json({ resources: skills });
+      // Map to frontend-expected format
+      const resources = skills.map(skill => ({
+        name: skill.name,
+        scope: skill.scope,
+        description: skill.description,
+        enabled: skill.enabled,
+        builtIn: false,
+        status: skill.status === 'loaded' || skill.status === undefined ? (skill.enabled ? 'enabled' : 'disabled') : skill.status,
+        error: skill.error,
+        lastModified: skill.lastReloadAt,
+      }));
+
+      res.json({ resources });
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : 'Unknown error';
       console.error('[Resources API] Failed to list skills:', message);
@@ -80,6 +246,17 @@ export function createResourcesRoutes(): express.Router {
   });
 
   // GET /api/resources/skills/:name - Get skill details
+  router.get('/skills/slash', (_req, res) => {
+    try {
+      const commands: SkillSlashCommand[] = skillRegistry.listSlashCommands();
+      res.json({ commands });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      console.error('[Resources API] Failed to list slash commands:', message);
+      res.status(500).json({ error: message });
+    }
+  });
+
   router.get('/skills/:name', (req, res) => {
     try {
       const { name } = req.params;
@@ -102,7 +279,8 @@ export function createResourcesRoutes(): express.Router {
   // POST /api/resources/skills - Create new skill
   router.post('/skills', (req, res) => {
     try {
-      const { name, markdown, scope } = req.body;
+      const { name, content, scope } = req.body;
+      const markdown = req.body.markdown ?? content;
 
       if (!name || typeof name !== 'string') {
         res.status(400).json({ error: 'Missing or invalid field: name (string required)' });
@@ -185,7 +363,8 @@ export function createResourcesRoutes(): express.Router {
   router.put('/skills/:name', (req, res) => {
     try {
       const { name } = req.params;
-      const { markdown, scope } = req.body;
+      const { content, scope } = req.body;
+      const markdown = req.body.markdown ?? content;
 
       if (!markdown || typeof markdown !== 'string') {
         res.status(400).json({ error: 'Missing or invalid field: markdown (string required)' });
@@ -318,22 +497,100 @@ export function createResourcesRoutes(): express.Router {
   // ============================================================================
 
   // GET /api/resources/mcp - List all MCP servers
-  router.get('/mcp', (req, res) => {
+  router.get('/mcp', async (req, res) => {
     try {
       const scope = req.query.scope as ResourceScope | undefined;
       const mcpRegistry = getMCPRegistry();
       let servers = mcpRegistry.list();
+      let liveStatus: Record<string, OpenCodeMCPStatus> = {};
+      let liveStatusError: string | undefined;
+
+      try {
+        liveStatus = await requestOpenCodeMCPStatus(req.query.directory);
+      } catch (error: unknown) {
+        liveStatusError = error instanceof Error ? error.message : String(error);
+      }
 
       // Filter by scope if provided
       if (scope === 'project' || scope === 'user') {
         servers = servers.filter((s) => s.scope === scope);
       }
 
-      res.json({ resources: servers });
+      // Map to frontend-expected format
+      const resourceNames = new Set(servers.map(server => server.name));
+      const liveOnlyServers: MCPServerSummary[] = req.query.includeLiveOnly === 'true'
+        ? Object.keys(liveStatus)
+        .filter(name => !resourceNames.has(name))
+        .map(name => ({
+          name,
+          scope: 'project' as const,
+          transport: 'http' as const,
+          description: undefined,
+          enabled: liveStatus[name].status === 'connected',
+          order: Number.MAX_SAFE_INTEGER,
+          valid: true,
+          error: undefined,
+          shadowed: false,
+        }))
+        : [];
+
+      const resources = [...servers, ...liveOnlyServers].map(server => {
+        const runtime = liveStatus[server.name];
+        const runtimeStatus = runtime?.status;
+        return {
+          name: server.name,
+          scope: server.scope,
+          description: server.description,
+          enabled: runtimeStatus ? runtimeStatus === 'connected' : server.enabled,
+          builtIn: false,
+          status: server.valid === false ? 'error' : (runtimeStatus || (server.enabled ? 'enabled' : 'disabled')),
+          runtimeStatus,
+          runtimeError: runtime && 'error' in runtime ? runtime.error : undefined,
+          statusSource: runtimeStatus ? 'opencode' : 'config',
+          error: server.error || (runtime && 'error' in runtime ? runtime.error : undefined),
+          command: server.transport === 'stdio' ? 'stdio' : server.transport,
+          toolCount: 0,
+          transport: server.transport,
+        };
+      });
+
+      res.json({ resources, liveStatus, liveStatusError });
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : 'Unknown error';
       console.error('[Resources API] Failed to list MCP servers:', message);
       res.status(500).json({ error: message });
+    }
+  });
+
+  router.get('/mcp/status', async (req, res) => {
+    try {
+      res.json({ status: await requestOpenCodeMCPStatus(req.query.directory) });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      console.error('[Resources API] Failed to get OpenCode MCP status:', message);
+      res.status(502).json({ error: message });
+    }
+  });
+
+  router.post('/mcp/:name/connect', async (req, res) => {
+    try {
+      const ok = await requestOpenCodeMCPToggle(req.params.name, 'connect', req.query.directory ?? req.body?.directory);
+      res.json({ ok });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      console.error('[Resources API] Failed to connect OpenCode MCP server:', message);
+      res.status(502).json({ error: message });
+    }
+  });
+
+  router.post('/mcp/:name/disconnect', async (req, res) => {
+    try {
+      const ok = await requestOpenCodeMCPToggle(req.params.name, 'disconnect', req.query.directory ?? req.body?.directory);
+      res.json({ ok });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      console.error('[Resources API] Failed to disconnect OpenCode MCP server:', message);
+      res.status(502).json({ error: message });
     }
   });
 
@@ -543,7 +800,19 @@ export function createResourcesRoutes(): express.Router {
         agents = agents.filter((a) => a.scope === scope);
       }
 
-      res.json({ resources: agents });
+      // Map to frontend-expected format
+      const resources = agents.map(agent => ({
+        name: agent.name,
+        scope: agent.scope,
+        description: agent.description,
+        enabled: agent.enabled,
+        builtIn: false,
+        mode: agent.mode,
+        status: agent.valid === false ? 'error' : (agent.enabled ? 'enabled' : 'disabled'),
+        error: agent.error,
+      }));
+
+      res.json({ resources });
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : 'Unknown error';
       console.error('[Resources API] Failed to list agents:', message);
@@ -678,11 +947,46 @@ export function createResourcesRoutes(): express.Router {
   // ============================================================================
 
   // GET /api/resources/providers - List all providers
-  router.get('/providers', (_req, res) => {
+  router.get('/providers', async (_req, res) => {
     try {
       const providerRegistry = getProviderRegistry();
-      const providers = providerRegistry.list();
-      res.json({ resources: providers });
+      const localProviders = providerRegistry.list();
+      const localById = new Map(localProviders.map(provider => [provider.providerId, provider]));
+
+      let providers: OpenCodeProviderSummary[];
+      try {
+        providers = (await requestOpenCodeProviders()).providers;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn('[Resources API] OpenCode provider list unavailable, using local cache:', message);
+        providers = localProviders.map(provider => ({
+          id: provider.providerId,
+          name: provider.displayName || provider.providerId,
+          source: provider.source,
+          connected: provider.configured,
+          models: (provider.models || providerRegistry.getModels(provider.providerId)).map(model => ({ id: model, name: model })),
+        }));
+      }
+
+      // Map to frontend-expected format
+      const resources = providers.map(provider => ({
+        id: provider.id,
+        name: provider.id,
+        displayName: provider.name,
+        type: localById.get(provider.id)?.type || 'api',
+        configured: provider.connected || !!localById.get(provider.id)?.configured,
+        editable: localById.get(provider.id)?.editable ?? true,
+        description: provider.name,
+        source: localById.get(provider.id)?.source || provider.source || (provider.connected ? 'config' : 'models'),
+        disabled: localById.get(provider.id)?.disabled || false,
+        enabled: !(localById.get(provider.id)?.disabled || false) && (provider.connected || !!localById.get(provider.id)?.configured),
+        builtIn: false,
+        status: localById.get(provider.id)?.disabled ? 'disabled' : ((provider.connected || localById.get(provider.id)?.configured) ? 'enabled' : 'not_configured'),
+        models: provider.models.map(model => model.id),
+        modelCount: provider.models.length,
+      }));
+
+      res.json({ resources });
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : 'Unknown error';
       console.error('[Resources API] Failed to list providers:', message);
@@ -690,25 +994,137 @@ export function createResourcesRoutes(): express.Router {
     }
   });
 
+  router.get('/models', async (_req, res) => {
+    try {
+      const providerRegistry = getProviderRegistry();
+      try {
+        const providerList = await requestOpenCodeProviders();
+        const models = providerList.providers.flatMap(provider => provider.models.map(model => ({
+          providerId: provider.id,
+          providerName: provider.name,
+          modelId: model.id,
+          name: model.name,
+          visible: providerRegistry.isModelVisible(provider.id, model.id),
+          custom: provider.source === 'custom' || provider.source === 'config',
+          fullName: `${provider.id}/${model.id}`,
+        })));
+        res.json({ models });
+        return;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn('[Resources API] OpenCode model list unavailable, using local cache:', message);
+      }
+
+      res.json({ models: providerRegistry.getAllModels() });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      console.error('[Resources API] Failed to get models:', message);
+      res.status(500).json({ error: message });
+    }
+  });
+
+  router.post('/models/:providerId/:modelId/visibility', async (req, res) => {
+    try {
+      const { providerId, modelId } = req.params;
+      const { visible } = req.body;
+      if (typeof visible !== 'boolean') {
+        res.status(400).json({ error: 'Missing or invalid field: visible (boolean required)' });
+        return;
+      }
+      const providerRegistry = getProviderRegistry();
+      await providerRegistry.setModelVisibility(providerId, modelId, visible);
+      res.json({ ok: true });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      console.error('[Resources API] Failed to update model visibility:', message);
+      res.status(500).json({ error: message });
+    }
+  });
+
+  router.get('/providers/models', (_req, res) => {
+    try {
+      const providerRegistry = getProviderRegistry();
+      const models = providerRegistry.getAllModels();
+
+      res.json({ models });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      console.error('[Resources API] Failed to get all models:', message);
+      res.status(500).json({ error: message });
+    }
+  });
+
+  router.post('/providers/custom', async (req, res) => {
+    try {
+      const providerRegistry = getProviderRegistry();
+      await providerRegistry.upsertCustomProvider(req.body);
+      res.status(201).json({ ok: true });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      console.error('[Resources API] Failed to create custom provider:', message);
+      res.status(400).json({ error: message });
+    }
+  });
+
+  router.put('/providers/custom/:id', async (req, res) => {
+    try {
+      const providerRegistry = getProviderRegistry();
+      await providerRegistry.upsertCustomProvider({ ...req.body, providerId: req.params.id });
+      res.json({ ok: true });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      console.error('[Resources API] Failed to update custom provider:', message);
+      res.status(400).json({ error: message });
+    }
+  });
+
+  router.delete('/providers/custom/:id', async (req, res) => {
+    try {
+      const providerRegistry = getProviderRegistry();
+      await providerRegistry.disconnect(req.params.id);
+      res.json({ ok: true });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      console.error('[Resources API] Failed to delete custom provider:', message);
+      res.status(500).json({ error: message });
+    }
+  });
+
+  router.post('/providers/:id/disconnect', async (req, res) => {
+    try {
+      const providerRegistry = getProviderRegistry();
+      await providerRegistry.disconnect(req.params.id);
+      res.json({ ok: true });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      console.error('[Resources API] Failed to disconnect provider:', message);
+      res.status(500).json({ error: message });
+    }
+  });
+
   // GET /api/resources/providers/:id - Get provider config
+
   router.get('/providers/:id', (req, res) => {
     try {
       const { id } = req.params;
 
       const providerRegistry = getProviderRegistry();
       const provider = providerRegistry.get(id);
+      const custom = providerRegistry.getCustom?.(id);
 
-      if (!provider) {
+      if (!provider && !custom) {
         res.status(404).json({ error: `Provider not found: ${id}` });
         return;
       }
 
       // Don't expose the actual API key
-      const sanitized = provider.type === 'api'
-        ? { type: 'api', key: provider.key ? '••••••••' : '' }
-        : provider;
+      const sanitized = provider
+        ? (provider.type === 'api'
+          ? { type: 'api', key: provider.key ? '••••••••' : '' }
+          : provider)
+        : undefined;
 
-      res.json({ provider: sanitized });
+      res.json({ provider: { ...custom, ...sanitized, auth: sanitized } });
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : 'Unknown error';
       console.error('[Resources API] Failed to get provider:', message);
@@ -720,10 +1136,10 @@ export function createResourcesRoutes(): express.Router {
   router.put('/providers/:id', async (req, res) => {
     try {
       const { id } = req.params;
-      const { key } = req.body;
+      const key = req.body.apiKey ?? req.body.key;
 
       if (!key || typeof key !== 'string') {
-        res.status(400).json({ error: 'Missing or invalid field: key (string required)' });
+        res.status(400).json({ error: 'Missing or invalid field: apiKey/key (string required)' });
         return;
       }
 
@@ -780,20 +1196,6 @@ export function createResourcesRoutes(): express.Router {
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : 'Unknown error';
       console.error('[Resources API] Failed to get provider models:', message);
-      res.status(500).json({ error: message });
-    }
-  });
-
-  // GET /api/resources/providers/models - Get all models
-  router.get('/providers/models', (_req, res) => {
-    try {
-      const providerRegistry = getProviderRegistry();
-      const models = providerRegistry.getAllModels();
-
-      res.json({ models });
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : 'Unknown error';
-      console.error('[Resources API] Failed to get all models:', message);
       res.status(500).json({ error: message });
     }
   });

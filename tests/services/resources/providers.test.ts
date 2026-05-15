@@ -25,6 +25,7 @@ describe('Provider Manager', () => {
     // 设置临时 auth.json 路径
     const tempAuthPath = path.join(FIXTURE_DIR, 'auth.json');
     process.env.OPENCODE_AUTH_PATH = tempAuthPath;
+    process.env.OPENCODE_BRIDGE_DATA_ROOT = path.join(FIXTURE_DIR, 'data');
 
     // 创建初始 auth.json
     await fs.writeFile(tempAuthPath, JSON.stringify({
@@ -45,6 +46,7 @@ describe('Provider Manager', () => {
     await registry?.dispose();
     await fs.rm(FIXTURE_DIR, { recursive: true, force: true });
     delete process.env.OPENCODE_AUTH_PATH;
+    delete process.env.OPENCODE_BRIDGE_DATA_ROOT;
   });
 
   describe('初始化', () => {
@@ -326,6 +328,109 @@ describe('Provider Manager', () => {
       const models = registry.getAllModels();
       expect(Array.isArray(models)).toBe(true);
     }, 60000); // 60秒超时（opencode models 可能很慢）
+  });
+
+  describe('自定义 Provider 与模型可见性', () => {
+    it('应该写入自定义 Provider 并保存 API Key', async () => {
+      registry = new ProviderRegistry();
+      await registry.init();
+
+      await registry.upsertCustomProvider({
+        providerId: 'custom-openai',
+        name: 'Custom OpenAI',
+        baseURL: 'https://api.example.com/v1',
+        apiKey: 'sk-custom-key',
+        models: [{ id: 'model-a', name: 'Model A' }],
+        headers: { 'x-test': 'true' },
+      });
+
+      const summary = registry.list().find(p => p.providerId === 'custom-openai');
+      expect(summary).toMatchObject({
+        providerId: 'custom-openai',
+        source: 'custom',
+        configured: true,
+        displayName: 'Custom OpenAI',
+        modelCount: 1,
+      });
+      expect(registry.getModels('custom-openai')).toEqual(['model-a']);
+
+      const custom = registry.getCustom('custom-openai');
+      expect(custom).toMatchObject({
+        providerId: 'custom-openai',
+        name: 'Custom OpenAI',
+        baseURL: 'https://api.example.com/v1',
+        models: [{ id: 'model-a', name: 'Model A' }],
+        headers: { 'x-test': 'true' },
+      });
+
+      const auth = registry.get('custom-openai');
+      expect(auth?.type).toBe('api');
+      if (auth?.type === 'api') {
+        expect(auth.key).toBe('sk-custom-key');
+      }
+    });
+
+    it('应该拒绝无效自定义 Provider 输入', async () => {
+      registry = new ProviderRegistry();
+      await registry.init();
+
+      await expect(registry.upsertCustomProvider({
+        providerId: 'Invalid ID',
+        name: 'Invalid',
+        baseURL: 'https://api.example.com/v1',
+        models: [{ id: 'model-a', name: 'Model A' }],
+      })).rejects.toThrow('Provider ID');
+
+      await expect(registry.upsertCustomProvider({
+        providerId: 'custom-openai',
+        name: 'Custom OpenAI',
+        baseURL: 'ftp://api.example.com/v1',
+        models: [{ id: 'model-a', name: 'Model A' }],
+      })).rejects.toThrow('baseURL');
+    });
+
+    it('应该保存模型隐藏状态', async () => {
+      registry = new ProviderRegistry();
+      await registry.init();
+
+      await registry.upsertCustomProvider({
+        providerId: 'custom-openai',
+        name: 'Custom OpenAI',
+        baseURL: 'https://api.example.com/v1',
+        models: [{ id: 'model-a', name: 'Model A' }],
+      });
+
+      await registry.setModelVisibility('custom-openai', 'model-a', false);
+
+      expect(registry.getAllModels()).toContainEqual(expect.objectContaining({
+        providerId: 'custom-openai',
+        modelId: 'model-a',
+        name: 'Model A',
+        visible: false,
+        custom: true,
+      }));
+    });
+
+    it('disconnect 应删除自定义 Provider 和 API Key', async () => {
+      registry = new ProviderRegistry();
+      await registry.init();
+
+      await registry.upsertCustomProvider({
+        providerId: 'custom-openai',
+        name: 'Custom OpenAI',
+        baseURL: 'https://api.example.com/v1',
+        apiKey: 'sk-custom-key',
+        models: [{ id: 'model-a', name: 'Model A' }],
+      });
+      await registry.disconnect('custom-openai');
+
+      expect(registry.get('custom-openai')).toBeNull();
+      expect(registry.getCustom('custom-openai')).toBeNull();
+
+      const overridesPath = path.join(FIXTURE_DIR, 'data', 'providers', 'overrides.json');
+      const overrides = JSON.parse(await fs.readFile(overridesPath, 'utf-8'));
+      expect(overrides.disabledProviders).toContain('custom-openai');
+    });
   });
 
   describe('isConfigured', () => {

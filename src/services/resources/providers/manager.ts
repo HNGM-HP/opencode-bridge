@@ -12,17 +12,21 @@
  */
 
 import fs from 'node:fs/promises';
+import path from 'node:path';
 import { spawn } from 'node:child_process';
 import {
   emitResourceChange,
 } from '../events.js';
+import { ensureResourceDir, getResourceDir } from '../paths.js';
 import { PROVIDER_REFRESH_INTERVAL_MS } from '../constants.js';
 import type {
   ApiProviderConfig,
+  CustomProviderInput,
   ModelsCache,
   ModelInfo,
   OpenCodeAuthConfig,
   ProviderConfig,
+  ProviderOverridesConfig,
   ProviderSummary,
 } from './types.js';
 
@@ -40,11 +44,21 @@ interface ProviderRegistryState {
   authConfig: OpenCodeAuthConfig;
   /** 模型列表缓存 */
   modelsCache: ModelsCache;
+  /** 项目级 provider 覆盖配置 */
+  overrides: ProviderOverridesConfig;
   /** 是否已初始化 */
   initialized: boolean;
   /** 是否已释放 */
   disposed: boolean;
 }
+
+const DEFAULT_OVERRIDES: ProviderOverridesConfig = {
+  providers: {},
+  disabledProviders: [],
+  hiddenModels: {},
+};
+
+const PROVIDER_ID_PATTERN = /^[a-z0-9][a-z0-9-_]*$/;
 
 /**
  * 读取 auth.json 文件
@@ -70,8 +84,54 @@ async function writeAuthConfig(config: OpenCodeAuthConfig): Promise<void> {
   const content = JSON.stringify(config, null, 2);
 
   // 原子性写入：先写临时文件，再重命名
+  await fs.mkdir(path.dirname(authPath), { recursive: true });
   await fs.writeFile(tempPath, content, 'utf-8');
   await fs.rename(tempPath, authPath);
+}
+
+function getOverridesPath(): string {
+  return path.join(getResourceDir('provider', 'project'), 'overrides.json');
+}
+
+async function readOverridesConfig(): Promise<ProviderOverridesConfig> {
+  try {
+    const parsed = JSON.parse(await fs.readFile(getOverridesPath(), 'utf-8')) as Partial<ProviderOverridesConfig>;
+    return {
+      providers: parsed.providers && typeof parsed.providers === 'object' ? parsed.providers : {},
+      disabledProviders: Array.isArray(parsed.disabledProviders) ? parsed.disabledProviders : [],
+      hiddenModels: parsed.hiddenModels && typeof parsed.hiddenModels === 'object' ? parsed.hiddenModels : {},
+    };
+  } catch {
+    return { ...DEFAULT_OVERRIDES, providers: {}, disabledProviders: [], hiddenModels: {} };
+  }
+}
+
+async function writeOverridesConfig(config: ProviderOverridesConfig): Promise<void> {
+  ensureResourceDir('provider', 'project');
+  await fs.writeFile(getOverridesPath(), JSON.stringify(config, null, 2), 'utf-8');
+}
+
+function validateCustomProviderInput(input: CustomProviderInput): void {
+  if (!PROVIDER_ID_PATTERN.test(input.providerId)) {
+    throw new Error('Provider ID must match /^[a-z0-9][a-z0-9-_]*$/');
+  }
+  if (!input.name?.trim()) {
+    throw new Error('Provider display name is required');
+  }
+  if (!/^https?:\/\//.test(input.baseURL || '')) {
+    throw new Error('Provider baseURL must start with http:// or https://');
+  }
+  if (!Array.isArray(input.models) || input.models.length === 0) {
+    throw new Error('At least one model is required');
+  }
+  const seenModels = new Set<string>();
+  for (const model of input.models) {
+    const id = model.id?.trim();
+    const name = model.name?.trim();
+    if (!id || !name) throw new Error('Model id and name are required');
+    if (seenModels.has(id)) throw new Error(`Duplicate model id: ${id}`);
+    seenModels.add(id);
+  }
 }
 
 /**
@@ -164,6 +224,7 @@ export class ProviderRegistry {
   private state: ProviderRegistryState = {
     authConfig: {},
     modelsCache: new Map(),
+    overrides: { ...DEFAULT_OVERRIDES, providers: {}, disabledProviders: [], hiddenModels: {} },
     initialized: false,
     disposed: false,
   };
@@ -182,6 +243,7 @@ export class ProviderRegistry {
 
     // 读取 auth.json
     this.state.authConfig = await readAuthConfig();
+    this.state.overrides = await readOverridesConfig();
 
     // 缓存 models（后台执行，不阻塞初始化）
     this.refreshModels().catch((err) => {
@@ -228,22 +290,50 @@ export class ProviderRegistry {
   }
 
   /**
+   * 重新读取 auth.json。OAuth login/logout 由 opencode CLI 写入文件后调用。
+   */
+  async reloadAuth(): Promise<void> {
+    this.state.authConfig = await readAuthConfig();
+    emitResourceChange('provider', 'reload');
+  }
+
+  async reloadOverrides(): Promise<void> {
+    this.state.overrides = await readOverridesConfig();
+    emitResourceChange('provider', 'reload');
+  }
+
+  /**
    * 列出所有 provider（摘要信息）
    */
   list(): ProviderSummary[] {
     const result: ProviderSummary[] = [];
+    const providerIds = new Set([
+      ...Object.keys(this.state.authConfig),
+      ...this.state.modelsCache.keys(),
+      ...Object.keys(this.state.overrides.providers),
+    ]);
 
-    for (const [providerId, config] of Object.entries(this.state.authConfig)) {
-      const configured = config.type === 'api'
-        ? !!config.key
-        : !!config.access;
+    for (const providerId of providerIds) {
+      const config = this.state.authConfig[providerId];
+      const custom = this.state.overrides.providers[providerId];
+      const type = config?.type ?? 'api';
+      const configured = config
+        ? (config.type === 'api' ? !!config.key : !!config.access)
+        : false;
+      const customModels = custom ? Object.keys(custom.models) : [];
+      const cachedModels = this.state.modelsCache.get(providerId) || [];
+      const models = Array.from(new Set([...customModels, ...cachedModels])).sort();
 
       result.push({
         providerId,
-        type: config.type,
-        configured,
-        editable: isProviderEditable(config),
-        displayName: PROVIDER_DISPLAY_NAMES[providerId],
+        type,
+        configured: configured || !!custom,
+        editable: custom ? true : (config ? isProviderEditable(config) : true),
+        displayName: custom?.name || PROVIDER_DISPLAY_NAMES[providerId] || providerId,
+        source: custom ? 'custom' : (config?.type === 'oauth' ? 'oauth' : (config?.type === 'api' ? 'api' : 'models')),
+        disabled: this.state.overrides.disabledProviders.includes(providerId),
+        models,
+        modelCount: models.length,
       });
     }
 
@@ -256,6 +346,18 @@ export class ProviderRegistry {
    */
   get(providerId: string): ProviderConfig | null {
     return this.state.authConfig[providerId] || null;
+  }
+
+  getCustom(providerId: string): CustomProviderInput | null {
+    const custom = this.state.overrides.providers[providerId];
+    if (!custom) return null;
+    return {
+      providerId,
+      name: custom.name,
+      baseURL: custom.options.baseURL,
+      models: Object.entries(custom.models).map(([id, model]) => ({ id, name: model.name })),
+      headers: custom.options.headers,
+    };
   }
 
   /**
@@ -324,6 +426,62 @@ export class ProviderRegistry {
     console.log(`[Providers] 已删除 provider "${providerId}"`);
   }
 
+  async upsertCustomProvider(input: CustomProviderInput): Promise<void> {
+    validateCustomProviderInput(input);
+    const existing = this.state.authConfig[input.providerId];
+    if (existing && existing.type === 'oauth') {
+      throw new Error(`Provider "${input.providerId}" 是 OAuth 类型，无法覆盖为自定义 Provider`);
+    }
+
+    this.state.overrides.providers[input.providerId] = {
+      npm: '@ai-sdk/openai-compatible',
+      name: input.name.trim(),
+      options: {
+        baseURL: input.baseURL.trim(),
+        ...(input.headers && Object.keys(input.headers).length > 0 ? { headers: input.headers } : {}),
+      },
+      models: Object.fromEntries(input.models.map(model => [model.id.trim(), { name: model.name.trim() }])),
+    };
+    this.state.overrides.disabledProviders = this.state.overrides.disabledProviders.filter(id => id !== input.providerId);
+    await writeOverridesConfig(this.state.overrides);
+
+    if (input.apiKey?.trim()) {
+      await this.setKey(input.providerId, input.apiKey.trim());
+    }
+
+    emitResourceChange('provider', 'update', { name: input.providerId });
+  }
+
+  async disconnect(providerId: string): Promise<void> {
+    if (this.state.overrides.providers[providerId]) {
+      delete this.state.overrides.providers[providerId];
+      delete this.state.overrides.hiddenModels[providerId];
+      await writeOverridesConfig(this.state.overrides);
+    }
+    if (this.state.authConfig[providerId]?.type === 'api') {
+      delete this.state.authConfig[providerId];
+      await writeAuthConfig(this.state.authConfig);
+    }
+    if (!this.state.overrides.disabledProviders.includes(providerId)) {
+      this.state.overrides.disabledProviders.push(providerId);
+      await writeOverridesConfig(this.state.overrides);
+    }
+    emitResourceChange('provider', 'remove', { name: providerId });
+  }
+
+  async setModelVisibility(providerId: string, modelId: string, visible: boolean): Promise<void> {
+    const hidden = new Set(this.state.overrides.hiddenModels[providerId] || []);
+    if (visible) hidden.delete(modelId);
+    else hidden.add(modelId);
+    this.state.overrides.hiddenModels[providerId] = Array.from(hidden).sort();
+    await writeOverridesConfig(this.state.overrides);
+    emitResourceChange('provider', 'update', { name: providerId });
+  }
+
+  isModelVisible(providerId: string, modelId: string): boolean {
+    return !(this.state.overrides.hiddenModels[providerId] || []).includes(modelId);
+  }
+
   /**
    * 刷新模型缓存（重新执行 opencode models）
    */
@@ -346,7 +504,11 @@ export class ProviderRegistry {
    * 获取指定 provider 的模型列表
    */
   getModels(providerId: string): string[] {
-    return this.state.modelsCache.get(providerId) || [];
+    const custom = this.state.overrides.providers[providerId];
+    return Array.from(new Set([
+      ...(custom ? Object.keys(custom.models) : []),
+      ...(this.state.modelsCache.get(providerId) || []),
+    ])).sort();
   }
 
   /**
@@ -360,12 +522,31 @@ export class ProviderRegistry {
         result.push({
           providerId,
           modelId,
+          providerName: this.state.overrides.providers[providerId]?.name || PROVIDER_DISPLAY_NAMES[providerId] || providerId,
+          name: this.state.overrides.providers[providerId]?.models[modelId]?.name || modelId,
+          visible: !(this.state.overrides.hiddenModels[providerId] || []).includes(modelId),
+          custom: !!this.state.overrides.providers[providerId]?.models[modelId],
           fullName: `${providerId}/${modelId}`,
         });
       }
     }
 
-    return result;
+    for (const [providerId, provider] of Object.entries(this.state.overrides.providers)) {
+      for (const [modelId, model] of Object.entries(provider.models)) {
+        if (result.some(item => item.providerId === providerId && item.modelId === modelId)) continue;
+        result.push({
+          providerId,
+          modelId,
+          providerName: provider.name,
+          name: model.name,
+          visible: !(this.state.overrides.hiddenModels[providerId] || []).includes(modelId),
+          custom: true,
+          fullName: `${providerId}/${modelId}`,
+        });
+      }
+    }
+
+    return result.sort((a, b) => a.fullName.localeCompare(b.fullName));
   }
 
   /**

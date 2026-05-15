@@ -2,7 +2,7 @@
  * Agent Migration Script
  *
  * 职责：
- *   1. 从 OpenCode 配置中读取现有 agent 定义
+ *   1. 从 ~/.config/opencode/agents/ 读取现有 agent 定义
  *   2. 检查 data/agents/ 目录是否为空
  *   3. 如果为空，将 OpenCode agent 配置导入为 JSON 文件
  *   4. 记录迁移结果日志
@@ -16,7 +16,8 @@
 
 import path from 'node:path';
 import fs from 'node:fs/promises';
-import { opencodeClient, type OpencodeAgentConfig } from '../../../opencode/client.js';
+import os from 'node:os';
+import type { OpencodeAgentConfig } from '../../../opencode/client.js';
 import { getResourceDir, ensureResourceDir } from '../paths.js';
 import type { AgentConfig } from './types.js';
 
@@ -68,25 +69,38 @@ async function isAgentsDirectoryEmpty(): Promise<boolean> {
 }
 
 /**
- * 从 OpenCode 配置中读取 agent 定义
+ * 从旧版 OpenCode agents 目录读取 agent 定义。
  */
-async function fetchAgentsFromOpenCode(): Promise<Map<string, OpencodeAgentConfig>> {
-  try {
-    const config = await opencodeClient.getConfig();
-    const agentMap = config.agent || {};
+async function fetchAgentsFromLegacyDir(): Promise<Map<string, OpencodeAgentConfig>> {
+  const legacyDir = path.join(os.homedir(), '.config', 'opencode', 'agents');
+  const result = new Map<string, OpencodeAgentConfig>();
 
-    const result = new Map<string, OpencodeAgentConfig>();
-    for (const [name, agentConfig] of Object.entries(agentMap)) {
-      if (agentConfig && typeof agentConfig === 'object') {
-        result.set(name, agentConfig as OpencodeAgentConfig);
+  try {
+    const files = await fs.readdir(legacyDir, { withFileTypes: true });
+    for (const ent of files) {
+      if (!ent.isFile() || !ent.name.endsWith('.json')) {
+        continue;
+      }
+
+      try {
+        const filePath = path.join(legacyDir, ent.name);
+        const raw = JSON.parse(await fs.readFile(filePath, 'utf-8')) as Record<string, unknown>;
+        if (!raw || typeof raw !== 'object') {
+          continue;
+        }
+        const name = typeof raw.name === 'string' && raw.name.trim()
+          ? raw.name.trim()
+          : path.basename(ent.name, '.json');
+        result.set(name, raw as OpencodeAgentConfig);
+      } catch (error) {
+        console.error(`[Migration] 读取旧 agent 文件失败: ${ent.name}`, error);
       }
     }
-
-    return result;
   } catch (error) {
-    console.error('[Migration] 从 OpenCode 读取 agent 配置失败:', error);
-    return new Map();
+    console.log(`[Migration] 旧 OpenCode agents 目录不存在或不可读: ${legacyDir}`);
   }
+
+  return result;
 }
 
 /**
@@ -132,16 +146,16 @@ export async function migrateAgentsFromOpenCode(): Promise<MigrationResult> {
       return result;
     }
 
-    console.log('[Migration] 开始从 OpenCode 迁移 agent 配置...');
+    console.log('[Migration] 开始从旧 OpenCode agents 目录迁移 agent 配置...');
 
-    // 2. 从 OpenCode 读取配置
-    const opencodeAgents = await fetchAgentsFromOpenCode();
+    // 2. 从 ~/.config/opencode/agents/ 读取配置
+    const opencodeAgents = await fetchAgentsFromLegacyDir();
     if (opencodeAgents.size === 0) {
-      console.log('[Migration] OpenCode 中无 agent 配置，跳过迁移');
+      console.log('[Migration] 旧 OpenCode agents 目录中无 agent 配置，跳过迁移');
       return result;
     }
 
-    console.log(`[Migration] 从 OpenCode 读取到 ${opencodeAgents.size} 个 agent 配置`);
+    console.log(`[Migration] 从旧 OpenCode agents 目录读取到 ${opencodeAgents.size} 个 agent 配置`);
 
     // 3. 确保 agents 目录存在
     await ensureResourceDir('agents', 'project');

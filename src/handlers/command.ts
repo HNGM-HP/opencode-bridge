@@ -1184,7 +1184,7 @@ export class CommandHandler {
 
         case 'role':
           // 角色创建功能已迁移至资源管理系统
-          await feishuClient.reply(messageId, `⚠️ 角色创建功能已迁移\n\n请使用以下方式管理智能体：\n• Web UI: 访问 http://host:port/resources\n• CLI: opencode-bridge bridge resource agent --help`);
+          await feishuClient.reply(messageId, `⚠️ 角色创建功能已下线\n\n请使用以下方式管理智能体：\n• Web UI: 访问 http://host:port/resources\n• CLI: opencode-bridge bridge resource agent --help`);
           break;
 
         case 'undo':
@@ -2301,6 +2301,7 @@ export class CommandHandler {
       command: [],
       mcp: [],
       skill: [],
+      agent: [],
       other: [],
     };
 
@@ -2324,6 +2325,7 @@ export class CommandHandler {
     pushGroup('内置', groups.command);
     pushGroup('MCP', groups.mcp);
     pushGroup('技能', groups.skill);
+    pushGroup('Agent', groups.agent);
     pushGroup('其他', groups.other);
 
     lines.push('\n💡 支持 // 命名空间透传，例如：//superpowers:brainstorming');
@@ -2367,6 +2369,7 @@ export class CommandHandler {
         command: [],
         mcp: [],
         skill: [],
+        agent: [],
         other: [],
       };
       for (const cmd of commands) {

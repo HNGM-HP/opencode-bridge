@@ -26,8 +26,6 @@ export const EN_TRANSLATION_MAP: Record<string, string> = {
   '上一项': 'Previous',
   '完成': 'Done',
   // ── 平台说明（用于引导第二步的卡片）
-  '飞书': 'Feishu',
-  '企业微信': 'WeCom',
   '个人微信': 'WeChat',
   '钉钉': 'DingTalk',
   '企业 IM，支持机器人回调与流式回复': 'Enterprise IM, bot callbacks and streaming replies',

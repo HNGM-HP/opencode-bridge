@@ -70,16 +70,15 @@
 </template>
 
 <script setup lang="ts">
-import { computed, defineAsyncComponent } from 'vue'
+import { computed } from 'vue'
 import { ElMessage } from 'element-plus'
 import { splitMarkdownSegments } from '../../components/ai-elements/markdown-utils'
+import CodeBlock from '../../components/ai-elements/CodeBlock.vue'
+import Markdown from '../../components/ai-elements/Markdown.vue'
 import AssistantTracePanel from './AssistantTracePanel.vue'
 import StreamingMessage from './StreamingMessage.vue'
 import type { ChatMessageVm } from '../../composables/chat-model'
 import { getActiveDateLocale } from '../../i18n/runtime'
-
-const CodeBlock = defineAsyncComponent(() => import('../../components/ai-elements/CodeBlock.vue'))
-const Markdown = defineAsyncComponent(() => import('../../components/ai-elements/Markdown.vue'))
 
 const props = defineProps<{
   message: ChatMessageVm

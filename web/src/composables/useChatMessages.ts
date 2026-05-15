@@ -198,6 +198,7 @@ export function useChatMessages(sessionId: Ref<string | null>) {
     modelId?: string
     agent?: string
     variant?: string
+    directory?: string
   }): Promise<void> {
     const trimmed = payload.text.trim()
     if (!trimmed && !payload.parts) return
@@ -223,6 +224,7 @@ export function useChatMessages(sessionId: Ref<string | null>) {
         modelId: payload.modelId,
         agent: payload.agent,
         variant: payload.variant,
+        directory: payload.directory,
       })
     } catch (error) {
       sending.value = false

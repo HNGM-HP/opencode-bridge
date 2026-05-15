@@ -1152,11 +1152,11 @@ export function createAdminServer(options: AdminServerOptions): { start: () => P
   registerWorkspaceFilesRoutes(api);
   registerWorkspaceTerminalRoutes(api);
 
+  // ── Resources OAuth 代执行路由（需先于 /resources 动态 provider 路由注册）
+  registerResourcesTerminalRoutes(api);
+
   // ── Resources 管理路由（Skills, MCP, Agents, Providers）
   api.use('/resources', createResourcesRoutes());
-
-  // ── Resources 终端路由（WebSocket终端用于OAuth登录）
-  registerResourcesTerminalRoutes(api);
 
   // ── POST /api/admin/shutdown（终止服务）
   api.post('/admin/shutdown', async (_req, res) => {
@@ -1532,7 +1532,7 @@ export function createAdminServer(options: AdminServerOptions): { start: () => P
     console.log(`[Admin] 可视化配置面板已启动: http://${lanIp}:${port}`);
   });
 
-      // ── 设置 WebSocket 终端服务器（用于 OAuth 登录）
+      // ── 兼容旧入口；OAuth 已改为 HTTP 代执行
       setupResourcesTerminalWebSocket(server);
     },
     stop() {

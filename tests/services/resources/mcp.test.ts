@@ -149,8 +149,8 @@ describe('MCP Manager', () => {
       const indexPath = path.join(FIXTURE_DIR, 'project', 'mcp', '_index.json');
       const indexContent = JSON.parse(await fs.readFile(indexPath, 'utf-8'));
 
-      expect(indexContent.enabled).toContain('server1');
-      expect(indexContent.disabled).toContain('server2');
+      expect(indexContent.enabled.map((entry: { name: string }) => entry.name)).toContain('server1');
+      expect(indexContent.disabled.map((entry: { name: string }) => entry.name)).toContain('server2');
     });
 
     it('切换 enabled 状态时应该更新索引', async () => {
@@ -168,8 +168,8 @@ describe('MCP Manager', () => {
       const indexPath = path.join(FIXTURE_DIR, 'project', 'mcp', '_index.json');
       const indexContent = JSON.parse(await fs.readFile(indexPath, 'utf-8'));
 
-      expect(indexContent.enabled).not.toContain('toggle-test');
-      expect(indexContent.disabled).toContain('toggle-test');
+      expect(indexContent.enabled.map((entry: { name: string }) => entry.name)).not.toContain('toggle-test');
+      expect(indexContent.disabled.map((entry: { name: string }) => entry.name)).toContain('toggle-test');
     });
 
     it('删除 server 时应该从索引移除', async () => {
