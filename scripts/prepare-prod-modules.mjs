@@ -79,10 +79,24 @@ function main() {
     process.exit(1);
   }
 
-  // 6. 清理临时目录
+  // 6. 从主 node_modules 覆盖 Electron 编译过的原生模块
+  //    CI 中 electron-rebuild 已在主 node_modules 中重建 better-sqlite3，
+  //    但 npm install --production 下载的是 Node.js 编译版，需要替换。
+  const nativeModules = ['better-sqlite3'];
+  for (const mod of nativeModules) {
+    const srcNative = resolve(rootDir, 'node_modules', mod);
+    const destNative = resolve(prodModules, mod);
+    if (existsSync(srcNative) && existsSync(destNative)) {
+      rmSync(destNative, { recursive: true, force: true });
+      cpSync(srcNative, destNative, { recursive: true });
+      log(`已覆盖 ${mod} 为 Electron 编译版本`);
+    }
+  }
+
+  // 7. 清理临时目录
   rmSync(tmpDir, { recursive: true, force: true });
 
-  // 7. 统计大小
+  // 8. 统计大小
   log('✅ 完成！node_modules_prod/ 已就绪');
 }
 
