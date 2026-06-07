@@ -19,7 +19,7 @@
  */
 
 import { mkdirSync, cpSync, rmSync, existsSync } from 'node:fs';
-import { resolve, dirname } from 'node:path';
+import { resolve, dirname, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execSync } from 'node:child_process';
 
@@ -49,7 +49,8 @@ function main() {
   // 3. 拷贝必要配置文件（preinstall 钩子、镜像源配置等）
   const copyIfExists = (src) => {
     if (existsSync(src)) {
-      const dest = resolve(tmpDir, src.replace(rootDir + '/', ''));
+      const rel = relative(rootDir, src);
+      const dest = resolve(tmpDir, rel);
       cpSync(src, dest, { recursive: true });
     }
   };
@@ -61,7 +62,7 @@ function main() {
   // 4. 在临时目录安装 production 依赖
   //    --prefer-offline 利用父目录的 node_modules 缓存加速
   log('正在安装 production 依赖（仅 dependencies）...');
-  run('npm install --production --prefer-offline', { cwd: tmpDir });
+  run('npm install --production', { cwd: tmpDir });
 
   // 5. 将生产环境 node_modules 移到根目录
   const tmpNodeModules = resolve(tmpDir, 'node_modules');
@@ -82,9 +83,7 @@ function main() {
   rmSync(tmpDir, { recursive: true, force: true });
 
   // 7. 统计大小
-  const size = execSync('du -sh node_modules_prod', { cwd: rootDir, encoding: 'utf-8' })
-    .trim().split(/\s+/)[0];
-  log(`✅ 完成！node_modules_prod/ 大小: ${size}`);
+  log('✅ 完成！node_modules_prod/ 已就绪');
 }
 
 main();
