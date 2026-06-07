@@ -1,6 +1,6 @@
 {
   "name": "opencode-bridge",
-  "version": "3.1.5",
+  "version": "3.1.6",
   "type": "module",
   "description": "Feishu / Discord × OpenCode bridge service with runtime cron and reliability tooling",
   "main": "dist-electron/main.js",
@@ -35,10 +35,12 @@
     "build:all": "npm run build:web && npm run build && npm run build:electron",
     "rebuild": "electron-rebuild -f -w better-sqlite3",
     "pack": "electron-builder --dir",
-    "dist": "electron-builder --publish never",
-    "dist:win": "electron-builder --win --publish never",
-    "dist:mac": "electron-builder --mac --publish never",
-    "dist:linux": "electron-builder --linux --publish never",
+    "prepare:pack": "node scripts/prepare-prod-modules.mjs",
+    "clean:pack": "node -e 'require(\"fs\").rmSync(\"node_modules_prod\",{recursive:true,force:true})'",
+    "dist": "npm run prepare:pack && electron-builder --publish never && npm run clean:pack",
+    "dist:win": "npm run prepare:pack && electron-builder --win --publish never && npm run clean:pack",
+    "dist:mac": "npm run prepare:pack && electron-builder --mac --publish never && npm run clean:pack",
+    "dist:linux": "npm run prepare:pack && electron-builder --linux --publish never && npm run clean:pack",
     "test": "vitest run",
     "test:watch": "vitest",
     "start": "node scripts/start.mjs",
@@ -119,7 +121,6 @@
       "output": "release"
     },
     "files": [
-      "dist/**/*",
       "dist-electron/**/*",
       "assets/**/*",
       "package.json",
@@ -155,31 +156,9 @@
         ]
       },
       {
-        "from": "node_modules",
+        "from": "node_modules_prod",
         "to": "app/node_modules",
-        "filter": [
-          "**/*",
-          "!*/{CHANGELOG.md,README.md,readme.md,LICENSE,license}",
-          "!.bin/**",
-          "!@esbuild{,/**}",
-          "!@img{,/**}",
-          "!@rolldown{,/**}",
-          "!@types{,/**}",
-          "!7zip-bin{,/**}",
-          "!app-builder-bin{,/**}",
-          "!chromium-bidi{,/**}",
-          "!devtools-protocol{,/**}",
-          "!electron{,/**}",
-          "!electron-builder{,/**}",
-          "!electron-rebuild{,/**}",
-          "!esbuild{,/**}",
-          "!lightningcss-*{,/**}",
-          "!puppeteer{,/**}",
-          "!puppeteer-core{,/**}",
-          "!tsx{,/**}",
-          "!typescript{,/**}",
-          "!vitest{,/**}"
-        ]
+        "filter": ["**/*"]
       }
     ],
     "win": {
