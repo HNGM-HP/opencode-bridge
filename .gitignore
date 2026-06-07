@@ -49,6 +49,8 @@ Thumbs.db
 tmp/
 temp/
 *.tmp
+*.bak
+*.bak.*
 
 # TypeScript
 *.tsbuildinfo
