@@ -192,6 +192,10 @@ function isOpenCodeCommand(command) {
   if (isBridgeCommand(normalizedCmd)) {
     return false;
   }
+  // 排除 opencode-bridge 项目路径，避免 process-manager 检测到自身
+  if (normalizedCmd.includes('opencode-bridge')) {
+    return false;
+  }
   // 精确匹配 opencode 命令，避免项目名干扰
   return /\bopencode\b/.test(normalizedCmd) || normalizedCmd.includes('opencode-cli');
 }
