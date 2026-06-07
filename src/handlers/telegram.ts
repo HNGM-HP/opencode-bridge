@@ -31,98 +31,22 @@ import {
   parseChatModelReference,
 } from '../utils/chat-model-whitelist.js';
 
-// 附件相关配置
-const ATTACHMENT_BASE_DIR = path.resolve(process.cwd(), 'tmp', 'telegram-uploads');
-const ALLOWED_ATTACHMENT_EXTENSIONS = new Set([
-  '.png', '.jpg', '.jpeg', '.gif', '.webp', '.pdf',
-  '.mp4', '.mov', '.mp3', '.ogg', '.wav', '.m4a',
-]);
+import {
+  ATTACHMENT_BASE_DIR,
+  ALLOWED_ATTACHMENT_EXTENSIONS,
+  type ParsedQuestionAnswer,
+  type OpencodeFilePartInput,
+  type OpencodePartInput,
+  type PermissionDecision,
+} from './telegram-types.js';
 
-// Helper functions for file type detection
-function extractExtension(name: string): string {
-  return path.extname(name).toLowerCase();
-}
+import {
+  extractExtension,
+  mimeFromExtension,
+  sanitizeFilename,
+  parsePermissionDecision,
+} from './telegram-utils.js';
 
-function mimeFromExtension(ext: string): string {
-  switch (ext) {
-    case '.png': return 'image/png';
-    case '.jpg':
-    case '.jpeg': return 'image/jpeg';
-    case '.gif': return 'image/gif';
-    case '.webp': return 'image/webp';
-    case '.pdf': return 'application/pdf';
-    case '.mp4': return 'video/mp4';
-    case '.mov': return 'video/quicktime';
-    case '.mp3': return 'audio/mpeg';
-    case '.ogg': return 'audio/ogg';
-    case '.wav': return 'audio/wav';
-    case '.m4a': return 'audio/mp4';
-    default: return 'application/octet-stream';
-  }
-}
-
-function sanitizeFilename(name: string): string {
-  const cleaned = name.replace(/[\\/:*?"<>|]+/g, '_').trim();
-  return cleaned || 'attachment';
-}
-
-type ParsedQuestionAnswer = { type: 'skip' | 'custom' | 'selection'; values?: string[]; custom?: string };
-
-type OpencodeFilePartInput = { type: 'file'; mime: string; url: string; filename?: string };
-type OpencodePartInput = { type: 'text'; text: string } | OpencodeFilePartInput;
-
-type PermissionDecision = {
-  allow: boolean;
-  remember: boolean;
-};
-
-function parsePermissionDecision(raw: string): PermissionDecision | null {
-  const normalized = raw.normalize('NFKC').trim().toLowerCase();
-  if (!normalized) {
-    return null;
-  }
-
-  const compact = normalized
-    .replace(/[\s\u3000]+/g, '')
-    .replace(/[。！!,.，；;:：\-]/g, '');
-
-  const hasAlways =
-    compact.includes('始终')
-    || compact.includes('永久')
-    || compact.includes('always')
-    || compact.includes('记住')
-    || compact.includes('总是');
-
-  const containsAny = (words: string[]): boolean => {
-    return words.some(word => compact === word || compact.includes(word));
-  };
-
-  const isDeny =
-    compact === 'n'
-    || compact === 'no'
-    || compact === '否'
-    || compact === '拒绝'
-    || containsAny(['拒绝', '不同意', '不允许', 'deny']);
-
-  if (isDeny) {
-    return { allow: false, remember: false };
-  }
-
-  const isAllow =
-    compact === 'y'
-    || compact === 'yes'
-    || compact === 'ok'
-    || compact === 'always'
-    || compact === '允许'
-    || compact === '始终允许'
-    || containsAny(['允许', '同意', '通过', '批准', 'allow']);
-
-  if (isAllow) {
-    return { allow: true, remember: hasAlways };
-  }
-
-  return null;
-}
 
 export class TelegramHandler {
   private ensureStreamingBuffer(chatId: string, sessionId: string): void {

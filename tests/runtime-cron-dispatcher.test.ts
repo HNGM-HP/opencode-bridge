@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createRuntimeCronDispatcher } from '../src/reliability/runtime-cron-dispatcher.js';
+import { createRuntimeCronDispatcher } from '../src/reliability/runtime-cron.js';
 import { chatSessionStore } from '../src/store/chat-session.js';
 import type { RuntimeCronJob } from '../src/reliability/runtime-cron.js';
 
@@ -58,7 +58,7 @@ describe('runtime-cron-dispatcher', () => {
   it('原窗口失效且存在私聊回退时应转发到私聊', async () => {
     process.env.RELIABILITY_CRON_FORWARD_TO_PRIVATE = 'true';
     vi.resetModules();
-    const { createRuntimeCronDispatcher: createDispatcher } = await import('../src/reliability/runtime-cron-dispatcher.js');
+    const { createRuntimeCronDispatcher: createDispatcher } = await import('../src/reliability/runtime-cron.js');
     const { chatSessionStore: store } = await import('../src/store/chat-session.js');
 
     store.setSessionByConversation('feishu', 'chat-private', 'session-private', 'user-1', '私聊-1', {

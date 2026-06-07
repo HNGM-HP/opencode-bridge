@@ -98,7 +98,9 @@ export class CardStreamer {
       this.finalDeliveryPromise = (async () => {
         const streamingMessageId = this.messageId;
         try {
-          const finalMessageId = await feishuClient.sendCard(this.chatId, card);
+          // 重新构建卡片，确保使用最新的状态（避免因并发 doUpdate 导致使用过期状态）
+          const finalCard = this.buildCard();
+          const finalMessageId = await feishuClient.sendCard(this.chatId, finalCard);
           if (finalMessageId) {
             this.finalMessageId = finalMessageId;
             if (streamingMessageId && this.deletedStreamingMessageId !== streamingMessageId) {

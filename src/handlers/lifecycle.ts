@@ -2,17 +2,9 @@ import { feishuClient } from '../feishu/client.js';
 import { chatSessionStore } from '../store/chat-session.js';
 import { opencodeClient } from '../opencode/client.js';
 import { reliabilityConfig, userConfig, isPlatformConfigured } from '../config.js';
-import { getRuntimeCronManager } from '../reliability/runtime-cron-registry.js';
-import { cleanupRuntimeCronJobsByConversation } from '../reliability/runtime-cron-orphan.js';
-
-export interface CleanupStats {
-  scannedChats: number;
-  disbandedChats: number;
-  deletedSessions: number;
-  skippedProtectedSessions: number;
-  removedOrphanMappings: number;
-  removedCronJobs: number;
-}
+import { getRuntimeCronManager } from '../reliability/runtime-cron.js';
+import { cleanupRuntimeCronJobsByConversation } from '../reliability/runtime-cron.js';
+import type { CleanupStats } from './lifecycle-types.js';
 
 export class LifecycleHandler {
   // 启动时清理无效群
@@ -170,3 +162,6 @@ export class LifecycleHandler {
 }
 
 export const lifecycleHandler = new LifecycleHandler();
+
+// Re-exports for backward compatibility
+export type { CleanupStats } from './lifecycle-types.js';

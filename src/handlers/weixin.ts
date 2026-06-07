@@ -28,95 +28,19 @@ import {
   isChatModelAllowed,
   parseChatModelReference,
 } from '../utils/chat-model-whitelist.js';
+import {
+  WEIXIN_MESSAGE_LIMIT,
+  WEIXIN_HELP_TEXT,
+  type ParsedQuestionAnswer,
+  type OpencodeFilePartInput,
+  type OpencodePartInput,
+  type PermissionDecision,
+} from './weixin-types.js';
 
-const WEIXIN_MESSAGE_LIMIT = 1800;
-const WEIXIN_HELP_TEXT = `📖 **微信 × OpenCode 机器人指南**
+import {
+  parsePermissionDecision,
+} from './weixin-utils.js';
 
-💬 **如何对话**
-直接发送消息即可与 AI 对话。
-
-🛠️ **常用命令**
-• \`/help\` 显示帮助
-• \`/model\` 查看当前模型
-• \`/model <名称>\` 切换模型
-• \`/models\` 列出所有可用模型
-• \`/agent\` 查看当前角色
-• \`/agent <名称>\` 切换角色
-• \`/agents\` 列出所有可用角色
-• \`/effort\` 查看当前强度
-• \`/effort <档位>\` 设置会话强度 (low/high/xhigh)
-• \`/undo\` 撤回上一轮对话
-• \`/stop\` 停止当前回答
-• \`/compact\` 压缩上下文
-
-⚙️ **会话管理**
-• \`/session new\` 开启新话题
-• \`/sessions\` 列出会话
-• \`/rename <新名称>\` 重命名会话
-• \`/project list\` 列出可用项目
-• \`/status\` 查看当前状态
-• \`/clear\` 重置对话上下文
-
-💡 **提示**
-• 切换的模型/角色仅对当前会话生效。
-• 支持 #前缀临时设置强度，如 \`#high 帮我分析代码\``;
-
-type ParsedQuestionAnswer = { type: 'skip' | 'custom' | 'selection'; values?: string[]; custom?: string };
-type OpencodeFilePartInput = { type: 'file'; mime: string; url: string; filename?: string };
-type OpencodePartInput = { type: 'text'; text: string } | OpencodeFilePartInput;
-
-type PermissionDecision = {
-  allow: boolean;
-  remember: boolean;
-};
-
-function parsePermissionDecision(raw: string): PermissionDecision | null {
-  const normalized = raw.normalize('NFKC').trim().toLowerCase();
-  if (!normalized) {
-    return null;
-  }
-
-  const compact = normalized
-    .replace(/[\s\u3000]+/g, '')
-    .replace(/[。！!,.，；;:：\-]/g, '');
-
-  const hasAlways =
-    compact.includes('始终')
-    || compact.includes('永久')
-    || compact.includes('always')
-    || compact.includes('记住')
-    || compact.includes('总是');
-
-  const containsAny = (words: string[]): boolean => {
-    return words.some(word => compact === word || compact.includes(word));
-  };
-
-  const isDeny =
-    compact === 'n'
-    || compact === 'no'
-    || compact === '否'
-    || compact === '拒绝'
-    || containsAny(['拒绝', '不同意', '不允许', 'deny']);
-
-  if (isDeny) {
-    return { allow: false, remember: false };
-  }
-
-  const isAllow =
-    compact === 'y'
-    || compact === 'yes'
-    || compact === 'ok'
-    || compact === 'always'
-    || compact === '允许'
-    || compact === '始终允许'
-    || containsAny(['允许', '同意', '通过', '批准', 'allow']);
-
-  if (isAllow) {
-    return { allow: true, remember: hasAlways };
-  }
-
-  return null;
-}
 
 export class WeixinHandler {
   private ensureStreamingBuffer(chatId: string, sessionId: string): void {

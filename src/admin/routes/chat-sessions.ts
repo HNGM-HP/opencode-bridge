@@ -186,8 +186,8 @@ export function registerChatSessionsRoutes(app: Application): void {
 
       res.json({ sessions: items });
     } catch (e) {
-      console.error('[Chat API] 获取会话列表失败:', e);
-      res.status(502).json({ error: errorMsg(e) });
+      console.warn('[Chat API] 获取会话列表失败（OpenCode 可能未运行）:', errorMsg(e));
+      res.json({ sessions: [], fallback: true, error: errorMsg(e) });
     }
   });
 
@@ -198,8 +198,8 @@ export function registerChatSessionsRoutes(app: Application): void {
       const session = await opencodeClient.createSession(title, directory);
       res.json({ session: toSessionItem(session) });
     } catch (e) {
-      console.error('[Chat API] 创建会话失败:', e);
-      res.status(502).json({ error: errorMsg(e) });
+      console.warn('[Chat API] 创建会话失败（OpenCode 可能未运行）:', errorMsg(e));
+      res.json({ session: null, fallback: true, error: 'OpenCode 未连接，请先在管理面板中启动 OpenCode。' });
     }
   });
 

@@ -15,14 +15,7 @@ import { commandHandler } from './command.js';
 import { groupHandler } from './group.js';
 import { directoryConfig, userConfig } from '../config.js';
 
-interface EnsurePrivateSessionResult {
-  firstBinding: boolean;
-}
-
-type OpencodeSession = Awaited<ReturnType<typeof opencodeClient.listSessions>>[number];
-
-const CREATE_CHAT_OPTION_LIMIT = 100;
-const CREATE_CHAT_EXISTING_LIMIT = CREATE_CHAT_OPTION_LIMIT - 1;
+import { CREATE_CHAT_OPTION_LIMIT, CREATE_CHAT_EXISTING_LIMIT, type EnsurePrivateSessionResult, type OpencodeSession } from './p2p-types.js';
 
 export class P2PHandler {
   private static readonly CARD_SELECTION_TTL_MS = 10 * 60 * 1000; // 10 分钟

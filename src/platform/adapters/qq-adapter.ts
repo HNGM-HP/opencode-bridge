@@ -18,207 +18,25 @@ import type {
 import { qqConfig } from '../../config.js';
 import { chatSessionStore } from '../../store/chat-session.js';
 
-const QQ_MESSAGE_LIMIT = 3000;
-const QQ_API_BASE = 'https://api.sgroup.qq.com';
-const QQ_OAUTH_BASE = 'https://bots.qq.com/app/getAppAccessToken';
-const QQ_GATEWAY_URL = 'https://api.sgroup.qq.com/gateway/bot';
+import {
+  QQ_MESSAGE_LIMIT,
+  QQ_API_BASE,
+  QQ_OAUTH_BASE,
+  QQ_GATEWAY_URL,
+  OpCode,
+  Intents,
+  FULL_INTENTS,
+  type QQProtocol,
+  type OneBotEvent,
+  type OneBotMessageSegment,
+  type OneBotAttachmentData,
+  type QQCardPayload,
+  type QQWSMessage,
+  type QQGatewayResponse,
+  type QQDispatchData,
+} from './qq-adapter-types.js';
 
-// WebSocket OpCode
-const OpCode = {
-  DISPATCH: 0,
-  HEARTBEAT: 1,
-  IDENTIFY: 2,
-  RESUME: 6,
-  RECONNECT: 7,
-  HELLO: 10,
-  HEARTBEAT_ACK: 11,
-} as const;
-
-// Intent 位掩码
-const Intents = {
-  GUILDS: 1 << 0,
-  GUILD_MEMBERS: 1 << 1,
-  DIRECT_MESSAGE: 1 << 12,
-  GROUP_AND_C2C: 1 << 25,
-  AUDIO_ACTION: 1 << 29,
-  AT_MESSAGES: 1 << 30,
-};
-
-// 完整权限（群聊 + 私信 + 频道）
-const FULL_INTENTS = Intents.AT_MESSAGES | Intents.DIRECT_MESSAGE | Intents.GROUP_AND_C2C;
-
-// ──────────────────────────────────────────────
-// 类型定义
-// ──────────────────────────────────────────────
-
-type QQProtocol = 'official' | 'onebot';
-
-type OneBotEvent = {
-  post_type: string;
-  message_type?: string;
-  message_id?: number;
-  user_id?: number;
-  group_id?: number;
-  message?: string | OneBotMessageSegment[];
-  raw_message?: string;
-  self_id?: number;
-};
-
-type OneBotMessageSegment = {
-  type: string;
-  data: Record<string, unknown>;
-};
-
-// OneBot 附件类型映射
-type OneBotAttachmentData = {
-  file?: string;       // 文件名或 URL
-  url?: string;        // 文件 URL
-  filename?: string;   // 文件名
-  size?: number;       // 文件大小
-  file_size?: number;  // 文件大小（备用字段）
-};
-
-type QQCardPayload = {
-  qqText?: string;
-  content?: string;
-  text?: string;
-  markdown?: string;
-  forcePlainText?: boolean;
-};
-
-// ──────────────────────────────────────────────
-// 工具函数
-// ──────────────────────────────────────────────
-
-function splitText(text: string, limit: number): string[] {
-  if (!text.trim()) return [];
-  if (text.length <= limit) return [text];
-
-  const chunks: string[] = [];
-  let remaining = text;
-  while (remaining.length > limit) {
-    const candidate = remaining.slice(0, limit);
-    const breakAt = Math.max(
-      candidate.lastIndexOf('\n'),
-      candidate.lastIndexOf('。'),
-      candidate.lastIndexOf('，'),
-      candidate.lastIndexOf(' ')
-    );
-    const cut = breakAt > Math.floor(limit * 0.5) ? breakAt : limit;
-    chunks.push(remaining.slice(0, cut));
-    remaining = remaining.slice(cut).trimStart();
-  }
-  if (remaining.length > 0) {
-    chunks.push(remaining);
-  }
-  return chunks;
-}
-
-function splitMarkdownText(text: string, limit: number): string[] {
-  if (!text.trim()) return [];
-  if (text.length <= limit) return [text];
-
-  const chunks: string[] = [];
-  const lines = text.split('\n');
-  const safeLimit = Math.max(256, limit - 8);
-  let current = '';
-  let openFence: string | null = null;
-
-  const getLastFenceLine = (value: string): string | null => {
-    const matches = value.match(/(^|\n)(```[^\n]*)/g);
-    if (!matches || matches.length === 0) return null;
-    return matches[matches.length - 1].replace(/^\n/, '');
-  };
-
-  const fenceCount = (value: string): number => (value.match(/```/g) || []).length;
-
-  const pushCurrent = (): void => {
-    if (!current.trim()) return;
-    let chunk = current;
-    if (fenceCount(chunk) % 2 === 1) {
-      openFence = getLastFenceLine(chunk) || '```';
-      chunk = `${chunk}\n\`\`\``;
-    } else {
-      openFence = null;
-    }
-    chunks.push(chunk);
-    current = openFence ? `${openFence}\n` : '';
-  };
-
-  for (const line of lines) {
-    const candidate = current
-      ? `${current}${current.endsWith('\n') ? '' : '\n'}${line}`
-      : line;
-    if (candidate.length <= safeLimit) {
-      current = candidate;
-      continue;
-    }
-
-    if (current) {
-      pushCurrent();
-    }
-
-    if (line.length <= safeLimit) {
-      current = line;
-      continue;
-    }
-
-    const pieces = splitText(line, safeLimit);
-    for (let i = 0; i < pieces.length - 1; i += 1) {
-      current = pieces[i];
-      pushCurrent();
-    }
-    current = pieces[pieces.length - 1] || '';
-  }
-
-  if (current.trim()) {
-    pushCurrent();
-  }
-
-  return chunks;
-}
-
-// ──────────────────────────────────────────────
-// QQ 官方 API 客户端 (WebSocket 方式)
-// ──────────────────────────────────────────────
-
-type QQWSMessage = {
-  op: number;
-  s?: number;
-  t?: string;
-  d?: unknown;
-};
-
-type QQGatewayResponse = {
-  url: string;
-  shards?: number;
-  session_start_limit?: {
-    total: number;
-    remaining: number;
-    reset_after: number;
-  };
-};
-
-type QQDispatchData = {
-  id?: string;
-  session_id?: string;
-  content?: string;
-  timestamp?: string;
-  author?: {
-    id?: string;
-    user_openid?: string;
-    member_openid?: string;
-  };
-  group_id?: string;
-  channel_id?: string;
-  guild_id?: string;
-  attachments?: Array<{
-    content_type?: string;
-    filename?: string;
-    url?: string;
-    size?: number;
-  }>;
-};
+import { splitText, splitMarkdownText } from './qq-adapter-utils.js';
 
 class QQOfficialClient {
   private ws: WebSocket | null = null;

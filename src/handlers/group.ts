@@ -17,80 +17,11 @@ import { randomUUID } from 'crypto';
 import path from 'path';
 import { promises as fs } from 'fs';
 
-// 附件相关配置
-const ATTACHMENT_BASE_DIR = path.resolve(process.cwd(), 'tmp', 'feishu-uploads');
-const ALLOWED_ATTACHMENT_EXTENSIONS = new Set([
-  '.png', '.jpg', '.jpeg', '.gif', '.webp', '.pdf',
-  '.pjp', '.pjpeg', '.jfif', '.jpe'
-]);
+import { ATTACHMENT_BASE_DIR, ALLOWED_ATTACHMENT_EXTENSIONS, type OpencodePartInput } from './group-types.js';
+import { getHeaderValue, extractExtension, normalizeExtension, extensionFromContentType, mimeFromExtension, sanitizeFilename } from './group-utils.js';
+import type { QuestionSkipActionResult } from './group-types.js';
 
-// Helper functions for file type detection
-function getHeaderValue(headers: Record<string, unknown>, name: string): string {
-  const target = name.toLowerCase();
-  for (const [key, value] of Object.entries(headers)) {
-    if (key.toLowerCase() === target) {
-      if (typeof value === 'string') return value;
-      if (Array.isArray(value) && typeof value[0] === 'string') return value[0];
-    }
-  }
-  return '';
-}
-
-function extractExtension(name: string): string {
-  return path.extname(name).toLowerCase();
-}
-
-function normalizeExtension(ext: string): string {
-  if (!ext) return '';
-  const withDot = ext.startsWith('.') ? ext.toLowerCase() : `.${ext.toLowerCase()}`;
-  if (withDot === '.jpeg' || withDot === '.pjpeg' || withDot === '.pjp' || withDot === '.jpe' || withDot === '.jfif') {
-    return '.jpg';
-  }
-  return withDot;
-}
-
-function extensionFromContentType(contentType: string): string {
-  const type = contentType.split(';')[0]?.trim().toLowerCase();
-  if (type === 'image/png') return '.png';
-  if (type === 'image/jpeg') return '.jpg';
-  if (type === 'image/gif') return '.gif';
-  if (type === 'image/webp') return '.webp';
-  if (type === 'application/pdf') return '.pdf';
-  return '';
-}
-
-function mimeFromExtension(ext: string): string {
-  switch (ext) {
-    case '.png':
-      return 'image/png';
-    case '.jpg':
-    case '.jpeg':
-    case '.pjpeg':
-    case '.pjp':
-    case '.jfif':
-    case '.jpe':
-      return 'image/jpeg';
-    case '.gif':
-      return 'image/gif';
-    case '.webp':
-      return 'image/webp';
-    case '.pdf':
-      return 'application/pdf';
-    default:
-      return 'application/octet-stream';
-  }
-}
-
-function sanitizeFilename(name: string): string {
-  const cleaned = name.replace(/[\\/:*?"<>|]+/g, '_').trim();
-  return cleaned || 'attachment';
-}
-
-type OpencodeFilePartInput = { type: 'file'; mime: string; url: string; filename?: string };
-
-type OpencodePartInput = { type: 'text'; text: string } | OpencodeFilePartInput;
-
-export type QuestionSkipActionResult = 'applied' | 'not_found' | 'stale_card' | 'invalid_state';
+export type { QuestionSkipActionResult } from './group-types.js';
 
 export class GroupHandler {
   constructor() {

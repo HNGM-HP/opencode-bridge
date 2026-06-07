@@ -25,13 +25,8 @@ import { MessageItemType, TypingStatus, ERRCODE_SESSION_EXPIRED } from './weixin
 import { encodeWeixinChatId, decodeWeixinChatId } from './weixin/weixin-ids.js';
 import { downloadMediaFromItem } from './weixin/weixin-media.js';
 
-// ──────────────────────────────────────────────
-// 常量
-// ──────────────────────────────────────────────
-
-const DEDUP_MAX = 500; // 每账号最大去重消息数
-const BACKOFF_BASE_MS = 2_000;
-const BACKOFF_MAX_MS = 30_000;
+import { DEDUP_MAX, BACKOFF_BASE_MS, BACKOFF_MAX_MS } from './weixin-adapter-types.js';
+import { sleep, accountToCreds } from './weixin-adapter-utils.js';
 
 // ──────────────────────────────────────────────
 // 会话暂停管理
@@ -79,7 +74,7 @@ class WeixinSender implements PlatformSender {
       return null;
     }
 
-    const creds = this.accountToCreds(account);
+    const creds = accountToCreds(account);
 
     // 去除 HTML/Markdown，微信只支持纯文本
     let content = text;
@@ -119,14 +114,6 @@ class WeixinSender implements PlatformSender {
     return false;
   }
 
-  private accountToCreds(account: WeixinAccountRow): WeixinCredentials {
-    return {
-      botToken: account.token,
-      ilinkBotId: account.account_id,
-      baseUrl: account.base_url || 'https://ilinkai.weixin.qq.com',
-      cdnBaseUrl: account.cdn_base_url || 'https://novac2c.cdn.weixin.qq.com/c2c',
-    };
-  }
 }
 
 // ──────────────────────────────────────────────
@@ -222,7 +209,7 @@ export class WeixinAdapter implements PlatformAdapter {
   }
 
   private async runPollLoop(account: WeixinAccountRow, signal: AbortSignal): Promise<void> {
-    const creds = this.accountToCreds(account);
+    const creds = accountToCreds(account);
     const accountId = account.account_id;
 
     console.log(`[Weixin] Poll loop started for ${accountId}`);
@@ -230,7 +217,7 @@ export class WeixinAdapter implements PlatformAdapter {
     while (this.isActive && !signal.aborted) {
       // 检查暂停状态
       if (isPaused(accountId)) {
-        await this.sleep(10_000, signal);
+        await sleep(10_000, signal);
         continue;
       }
 
@@ -281,7 +268,7 @@ export class WeixinAdapter implements PlatformAdapter {
           error instanceof Error ? error.message : error,
         );
 
-        await this.sleep(backoff, signal);
+        await sleep(backoff, signal);
       }
     }
 
@@ -438,7 +425,7 @@ export class WeixinAdapter implements PlatformAdapter {
     const contextToken = configStore.getWeixinContextToken(accountId, peerUserId);
     if (!contextToken) return;
 
-    const creds = this.accountToCreds(account);
+    const creds = accountToCreds(account);
 
     // 获取或缓存 typing ticket
     const ticketKey = `${accountId}:${peerUserId}`;
@@ -457,29 +444,6 @@ export class WeixinAdapter implements PlatformAdapter {
     if (!ticket) return;
 
     await apiSendTyping(creds, peerUserId, ticket, status);
-  }
-
-  // ──────────────────────────────────────────────
-  // 工具方法
-  // ──────────────────────────────────────────────
-
-  private accountToCreds(account: WeixinAccountRow): WeixinCredentials {
-    return {
-      botToken: account.token,
-      ilinkBotId: account.account_id,
-      baseUrl: account.base_url || 'https://ilinkai.weixin.qq.com',
-      cdnBaseUrl: account.cdn_base_url || 'https://novac2c.cdn.weixin.qq.com/c2c',
-    };
-  }
-
-  private sleep(ms: number, signal?: AbortSignal): Promise<void> {
-    return new Promise(resolve => {
-      const timer = setTimeout(resolve, ms);
-      signal?.addEventListener('abort', () => {
-        clearTimeout(timer);
-        resolve();
-      }, { once: true });
-    });
   }
 
   // ──────────────────────────────────────────────

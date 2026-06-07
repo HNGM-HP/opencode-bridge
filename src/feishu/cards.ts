@@ -1,13 +1,35 @@
-// 权限确认卡片模板
-export interface PermissionCardData {
-  tool: string;
-  description: string;
-  risk?: string;
-  sessionId: string;
-  permissionId: string;
-  parentSessionId?: string;
-  relatedSessionId?: string;
-}
+import {
+  type PermissionCardData,
+  type StatusCardData,
+  type MarkdownCardPage,
+  type HelpShortcutAction,
+  type ShortcutCardData,
+  type HelpCardData,
+  type ControlCardData,
+  type SessionCtlSessionOption,
+  type SessionControlCardData,
+  type SessionListActionCardData,
+  type SessionListCardEntry,
+  type SessionListCardData,
+  type QuestionOption,
+  type QuestionInfo,
+  type QuestionCardData,
+  type CreateChatSessionOption,
+  type CreateChatCardData,
+  SESSION_CTL_CURRENT_VALUE,
+  SESSION_CTL_NEW_VALUE,
+  QUESTION_OPTION_PAGE_SIZE,
+  CREATE_CHAT_NEW_SESSION_VALUE,
+} from './cards-types.js';
+
+import {
+  wrapText,
+  formatOptionDescription,
+  resolveCreateChatCardState,
+  buildCreateChatSelectorElements,
+} from './cards-utils.js';
+
+
 
 export function buildPermissionCard(data: PermissionCardData): object {
   const riskColor = data.risk === 'high' ? 'red' : data.risk === 'medium' ? 'orange' : 'green';
@@ -114,14 +136,6 @@ export function buildPermissionCard(data: PermissionCardData): object {
   };
 }
 
-// 执行状态卡片
-export interface StatusCardData {
-  status: 'running' | 'completed' | 'failed' | 'aborted';
-  sessionId: string;
-  currentTool?: string;
-  progress?: string;
-  output?: string;
-}
 
 export function buildStatusCard(data: StatusCardData): object {
   const statusMap = {
@@ -215,11 +229,6 @@ export function buildStatusCard(data: StatusCardData): object {
   };
 }
 
-export interface MarkdownCardPage {
-  title: string;
-  markdown: string;
-  template?: 'blue' | 'green' | 'red' | 'orange' | 'grey';
-}
 
 export function buildMarkdownCard(page: MarkdownCardPage): object {
   const content = page.markdown.trim() || '（无内容）';
@@ -246,28 +255,6 @@ export function buildMarkdownCard(page: MarkdownCardPage): object {
   };
 }
 
-export interface HelpShortcutAction {
-  label: string;
-  command: string;
-}
-
-export interface ShortcutCardData {
-  title: string;
-  description?: string;
-  chatId: string;
-  chatType: 'p2p' | 'group';
-  shortcuts: HelpShortcutAction[];
-  template?: 'blue' | 'green' | 'red' | 'orange' | 'grey';
-}
-
-export interface HelpCardData {
-  title: string;
-  markdown: string;
-  chatId: string;
-  chatType: 'p2p' | 'group';
-  shortcuts: HelpShortcutAction[];
-  template?: 'blue' | 'green' | 'red' | 'orange' | 'grey';
-}
 
 export function buildHelpCard(data: HelpCardData): object {
   const shortcutRows: HelpShortcutAction[][] = [];
@@ -395,16 +382,7 @@ export function buildShortcutCommandCard(data: ShortcutCardData): object {
 }
 
 // 控制面板卡片
-export interface ControlCardData {
-  conversationKey: string;
-  chatId: string;
-  chatType: 'p2p' | 'group';
-  currentModel?: string;
-  currentAgent?: string;
-  currentEffort?: string;
-  models: Array<{ label: string; value: string }>;
-  agents: Array<{ label: string; value: string }>;
-}
+
 
 export function buildControlCard(data: ControlCardData): object {
   const modelOptions = data.models.map(item => ({
@@ -479,24 +457,6 @@ export function buildControlCard(data: ControlCardData): object {
   };
 }
 
-export interface SessionCtlSessionOption {
-  label: string;
-  value: string;
-}
-
-export interface SessionControlCardData {
-  chatId: string;
-  chatType: 'p2p' | 'group';
-  currentDirectory: string;
-  currentSessionId: string;
-  currentSessionTitle: string;
-  selectedSessionId: string;
-  sessionOptions: SessionCtlSessionOption[];
-  totalSessionCount?: number;
-}
-
-export const SESSION_CTL_CURRENT_VALUE = '__current_session__';
-export const SESSION_CTL_NEW_VALUE = '__new_session__';
 
 export function buildSessionControlCard(data: SessionControlCardData): object {
   const shownExistingCount = data.sessionOptions.filter(option =>
@@ -588,13 +548,6 @@ export function buildSessionControlCard(data: SessionControlCardData): object {
   };
 }
 
-export interface SessionListActionCardData {
-  title: string;
-  sessionId: string;
-  markdown: string;
-  chatId: string;
-  chatType: 'p2p' | 'group';
-}
 
 export function buildSessionListActionCard(data: SessionListActionCardData): object {
   return {
@@ -639,18 +592,6 @@ export function buildSessionListActionCard(data: SessionListActionCardData): obj
   };
 }
 
-export interface SessionListCardEntry {
-  sessionId: string;
-  markdown: string;
-}
-
-export interface SessionListCardData {
-  title: string;
-  summaryMarkdown: string;
-  chatId: string;
-  chatType: 'p2p' | 'group';
-  entries: SessionListCardEntry[];
-}
 
 export function buildSessionListCard(data: SessionListCardData): object {
   const elements: object[] = [
@@ -714,49 +655,7 @@ export function buildSessionListCard(data: SessionListCardData): object {
 }
 
 // AI 提问卡片 (question 工具)
-export interface QuestionOption {
-  label: string;
-  description: string;
-}
 
-export interface QuestionInfo {
-  question: string;
-  header: string;
-  options: QuestionOption[];
-  multiple?: boolean;
-  custom?: boolean;
-}
-
-export interface QuestionCardData {
-  requestId: string;
-  sessionId: string;
-  questions: QuestionInfo[];
-  conversationKey: string;
-  chatId: string;
-  draftAnswers?: string[][];
-  draftCustomAnswers?: string[];
-  pendingCustomQuestionIndex?: number;
-  currentQuestionIndex?: number;
-  optionPageIndexes?: number[];
-}
-
-export const QUESTION_OPTION_PAGE_SIZE = 15;
-const QUESTION_DESCRIPTION_MAX_LENGTH = 120;
-const QUESTION_DESCRIPTION_LINE_LENGTH = 40;
-
-function wrapText(text: string, lineLength: number): string {
-  if (text.length <= lineLength) return text;
-  const parts: string[] = [];
-  for (let i = 0; i < text.length; i += lineLength) {
-    parts.push(text.slice(i, i + lineLength));
-  }
-  return parts.join('\n    ');
-}
-
-function formatOptionDescription(description: string): string {
-  const trimmed = description.trim().slice(0, QUESTION_DESCRIPTION_MAX_LENGTH);
-  return wrapText(trimmed, QUESTION_DESCRIPTION_LINE_LENGTH);
-}
 
 // 文字选择方案：只读卡片 + 跳过按钮
 export function buildQuestionCardV2(data: QuestionCardData): object {
@@ -881,148 +780,6 @@ export function buildQuestionAnsweredCardSimple(answer: string): object {
   return buildQuestionAnsweredCard([[answer]]);
 }
 
-export const CREATE_CHAT_NEW_SESSION_VALUE = '__new_session__';
-
-export interface CreateChatSessionOption {
-  label: string;
-  value: string;
-}
-
-export interface CreateChatCardData {
-  selectedSessionId?: string;
-  sessionOptions: CreateChatSessionOption[];
-  totalSessionCount?: number;
-  manualBindEnabled: boolean;
-  projectOptions?: Array<{ name: string; directory: string; source: 'alias' | 'history' }>;
-  allowCustomPath?: boolean;
-  chatNameInput?: string;  // 用户输入的群名称（用于回显）
-}
-
-function resolveCreateChatCardState(data: CreateChatCardData): {
-  options: CreateChatSessionOption[];
-  selected: CreateChatSessionOption;
-  shownExistingCount: number;
-  totalSessionCount: number;
-} {
-  const options = data.sessionOptions.length > 0
-    ? data.sessionOptions
-    : [{ label: '新建 OpenCode 会话', value: CREATE_CHAT_NEW_SESSION_VALUE }];
-
-  const selected = options.find(option => option.value === data.selectedSessionId) || options[0];
-  const shownExistingCount = options.filter(option => option.value !== CREATE_CHAT_NEW_SESSION_VALUE).length;
-  const totalSessionCount = typeof data.totalSessionCount === 'number' && data.totalSessionCount >= shownExistingCount
-    ? data.totalSessionCount
-    : shownExistingCount;
-
-  return {
-    options,
-    selected,
-    shownExistingCount,
-    totalSessionCount,
-  };
-}
-
-function buildCreateChatSelectorElements(data: CreateChatCardData): object[] {
-  const state = resolveCreateChatCardState(data);
-  const noteLines: string[] = [
-    '请先在下拉中选择会话来源，再点击“创建群聊”。',
-    `未主动选择时默认：${state.selected.label}`,
-  ];
-
-  if (!data.manualBindEnabled) {
-    noteLines.push('当前环境已禁用“绑定已有会话”，仅可新建会话。');
-  }
-
-  if (state.totalSessionCount > state.shownExistingCount) {
-    noteLines.push(`已展示最近 ${state.shownExistingCount} 个会话（总计 ${state.totalSessionCount} 个）。`);
-  }
-
-  // 所有交互元素放入同一个 form 容器，确保 input 值能通过 form_value 传递
-  // 顺序：群名 → 会话来源 → 工作项目 → 自定义工作目录 → 提交按钮
-  const formElements: object[] = [];
-
-  // 1. 群名称输入框
-  formElements.push({
-    tag: 'input',
-    name: 'chat_name',
-    placeholder: { tag: 'plain_text', content: '群名称（可选，留空自动生成）' },
-    ...(data.chatNameInput ? { default_value: data.chatNameInput } : {}),
-  });
-
-  // 2. 会话来源选择器（select_static 在 form 内直接使用，不包 action 容器）
-  formElements.push({
-    tag: 'select_static',
-    name: 'session_source',
-    placeholder: { tag: 'plain_text', content: '选择会话来源' },
-    value: { action: 'create_chat_select' },
-    options: state.options.map(option => ({
-      text: { tag: 'plain_text', content: option.label },
-      value: option.value,
-    })),
-  });
-
-  // 3. 工作项目选择器（可选）
-  const projectCandidates = data.projectOptions || [];
-  const projectOpts = [
-    { text: { tag: 'plain_text', content: '跟随默认项目' }, value: '__default__' },
-    ...projectCandidates.map(project => ({
-      text: {
-        tag: 'plain_text',
-        content: `${project.name}（${project.directory.length > 40 ? '...' + project.directory.slice(-37) : project.directory}）`,
-      },
-      value: project.directory,
-    })),
-  ];
-  formElements.push({
-    tag: 'select_static',
-    name: 'project_source',
-    placeholder: { tag: 'plain_text', content: '选择工作项目（可选）' },
-    value: { action: 'create_chat_project_select' },
-    options: projectOpts,
-  });
-
-  // 4. 自定义工作目录输入框（可选）
-  if (data.allowCustomPath) {
-    formElements.push({
-      tag: 'input',
-      name: 'custom_directory',
-      placeholder: { tag: 'plain_text', content: '手动输入工作目录绝对路径（可选）' },
-    });
-  }
-
-  // 5. 提交按钮
-  formElements.push({
-    tag: 'button',
-    text: { tag: 'plain_text', content: '➕ 创建群聊' },
-    type: 'primary',
-    action_type: 'form_submit',
-    name: 'create_chat_submit',
-    value: {
-      action: 'create_chat_submit',
-      selectedSessionId: state.selected.value,
-    },
-  });
-
-  const elements: object[] = [];
-  elements.push({
-    tag: 'form',
-    name: 'create_chat_form',
-    elements: formElements,
-  });
-
-  noteLines.push('工作项目决定 AI 在哪份代码上工作。未选择时使用默认项目。');
-  elements.push({
-    tag: 'note',
-    elements: [
-      {
-        tag: 'plain_text',
-        content: noteLines.join('\n'),
-      },
-    ],
-  });
-
-  return elements;
-}
 
 export function buildCreateChatCard(data: CreateChatCardData): object {
   const elements: object[] = [
@@ -1098,3 +855,32 @@ export function buildWelcomeCard(userName: string, createChatData?: CreateChatCa
     elements: baseElements,
   };
 }
+
+// ── 类型与常量重导出（向后兼容） ────────────
+
+export type {
+  PermissionCardData,
+  StatusCardData,
+  MarkdownCardPage,
+  HelpShortcutAction,
+  ShortcutCardData,
+  HelpCardData,
+  ControlCardData,
+  SessionCtlSessionOption,
+  SessionControlCardData,
+  SessionListActionCardData,
+  SessionListCardEntry,
+  SessionListCardData,
+  QuestionOption,
+  QuestionInfo,
+  QuestionCardData,
+  CreateChatSessionOption,
+  CreateChatCardData,
+} from './cards-types.js';
+
+export {
+  SESSION_CTL_CURRENT_VALUE,
+  SESSION_CTL_NEW_VALUE,
+  QUESTION_OPTION_PAGE_SIZE,
+  CREATE_CHAT_NEW_SESSION_VALUE,
+} from './cards-types.js';

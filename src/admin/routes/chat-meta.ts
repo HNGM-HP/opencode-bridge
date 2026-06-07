@@ -364,8 +364,8 @@ export function registerChatMetaRoutes(app: Application): void {
       workspaces.sort((left, right) => left.directory.localeCompare(right.directory, 'zh-Hans-CN'));
       res.json({ workspaces });
     } catch (error) {
-      console.error('[Chat API] 获取工作区列表失败:', error);
-      res.status(502).json({ error: errorMsg(error) });
+      console.warn('[Chat API] 获取工作区列表失败（OpenCode 可能未运行）:', errorMsg(error));
+      res.json({ workspaces: [], fallback: true, error: errorMsg(error) });
     }
   });
 
@@ -377,8 +377,8 @@ export function registerChatMetaRoutes(app: Application): void {
 
       res.json({ agents });
     } catch (error) {
-      console.error('[Chat API] 获取 Agent 列表失败:', error);
-      res.status(502).json({ error: errorMsg(error) });
+      console.warn('[Chat API] 获取 Agent 列表失败（OpenCode 可能未运行）:', errorMsg(error));
+      res.json({ agents: [], fallback: true, error: errorMsg(error) });
     }
   });
 
@@ -417,8 +417,8 @@ export function registerChatMetaRoutes(app: Application): void {
 
       res.json({ providers: items });
     } catch (error) {
-      console.error('[Chat API] 获取模型列表失败:', error);
-      res.status(502).json({ error: errorMsg(error) });
+      console.warn('[Chat API] 获取模型列表失败（OpenCode 可能未运行）:', errorMsg(error));
+      res.json({ providers: [], fallback: true, error: errorMsg(error) });
     }
   });
 
@@ -428,8 +428,8 @@ export function registerChatMetaRoutes(app: Application): void {
       const models = await opencodeClient.listVisionModels();
       res.json({ models });
     } catch (error) {
-      console.error('[Chat API] 获取多模态模型列表失败:', error);
-      res.status(502).json({ error: errorMsg(error) });
+      console.warn('[Chat API] 获取多模态模型列表失败（OpenCode 可能未运行）:', errorMsg(error));
+      res.json({ models: [], fallback: true, error: errorMsg(error) });
     }
   });
 
@@ -481,7 +481,8 @@ export function registerChatMetaRoutes(app: Application): void {
         }));
         res.json({ commands: groupedFallback, fallback: true, error: errorMsg(error) });
       } catch (fallbackError) {
-        res.status(502).json({ error: errorMsg(fallbackError) });
+        console.error('[Chat API] 获取命令列表失败（fallback 也失败）:', errorMsg(fallbackError));
+        res.json({ commands: [], fallback: true, error: errorMsg(fallbackError) });
       }
     }
   });

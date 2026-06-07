@@ -964,7 +964,7 @@ export function createResourcesRoutes(): express.Router {
           name: provider.displayName || provider.providerId,
           source: provider.source,
           connected: provider.configured,
-          models: (provider.models || providerRegistry.getModels(provider.providerId)).map(model => ({ id: model, name: model })),
+          models: (provider.models || providerRegistry.getModels(provider.providerId) || []).map(model => ({ id: model, name: model })),
         }));
       }
 

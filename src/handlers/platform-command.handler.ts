@@ -14,22 +14,7 @@ import { buildSessionTimestamp } from '../utils/session-title.js';
 import { modelConfig, userConfig } from '../config.js';
 import type { PlatformSender } from '../platform/types.js';
 import { isChatModelAllowed, parseChatModelReference } from '../utils/chat-model-whitelist.js';
-
-const EFFORT_USAGE_TEXT = '用法: /effort（查看） 或 /effort <low|high|max|xhigh>（设置） 或 /effort default（清除）';
-const EFFORT_DISPLAY_ORDER = KNOWN_EFFORT_LEVELS;
-
-interface ProviderModelMeta {
-  providerId: string;
-  modelId: string;
-  modelName?: string;
-  variants: EffortLevel[];
-}
-
-interface EffortSupportInfo {
-  model: { providerId: string; modelId: string } | null;
-  supportedEfforts: EffortLevel[];
-  modelMatched: boolean;
-}
+import { EFFORT_USAGE_TEXT, EFFORT_DISPLAY_ORDER, type ProviderModelMeta, type EffortSupportInfo } from './command-types.js';
 
 /**
  * 多平台命令处理器

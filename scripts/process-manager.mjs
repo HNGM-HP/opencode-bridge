@@ -8,7 +8,7 @@
  *   node process-manager.mjs kill-opencode      # 终止所有 OpenCode 进程
  *   node process-manager.mjs list-bridge        # 列出所有 Bridge 进程
  *   node process-manager.mjs list-opencode      # 列出所有 OpenCode 进程
- *   node process-manager.mjs start-opencode     # 后台启动 opencode serve（幂等）
+ *   node process-manager.mjs start-opencode [--port <port>]  # 后台启动 opencode serve（幂等）
  *   node process-manager.mjs status-opencode    # 检查 opencode serve 运行状态
  */
 
@@ -370,7 +370,7 @@ function printUsage() {
   node process-manager.mjs kill-opencode      # 终止所有 OpenCode 进程
   node process-manager.mjs list-bridge        # 列出所有 Bridge 进程
   node process-manager.mjs list-opencode      # 列出所有 OpenCode 进程
-  node process-manager.mjs start-opencode     # 后台启动 opencode serve（幂等）
+  node process-manager.mjs start-opencode [--port <port>]  # 后台启动 opencode serve（幂等）
   node process-manager.mjs status-opencode    # 检查 opencode serve 运行状态
   node process-manager.mjs help               # 显示此帮助信息
 
@@ -480,8 +480,15 @@ function main() {
     }
 
     case 'start-opencode': {
-      console.log('[process-manager] 正在启动 opencode serve...');
-      const result = startOpenCodeServe();
+      // 解析 --port 参数
+      let servePort = null;
+      const portIndex = args.indexOf('--port');
+      if (portIndex !== -1 && args[portIndex + 1]) {
+        servePort = parseInt(args[portIndex + 1], 10);
+      }
+
+      console.log('[process-manager] 正在启动 opencode serve' + (servePort ? ` (端口: ${servePort})` : '') + '...');
+      const result = startOpenCodeServe({ port: servePort || undefined });
       if (result.skipped) {
         console.log(`[process-manager] opencode serve 已在运行 (PID: ${result.pid})`);
       } else if (result.started) {
@@ -640,12 +647,14 @@ function readAlivePid(pidFilePath) {
  * @param {string} [options.pidFilePath]
  * @param {string} [options.logFile]
  * @param {string} [options.errFile]
+ * @param {number} [options.port]
  * @returns {{ started: boolean, pid: number | null, skipped: boolean, reason: string }}
  */
 function startOpenCodeServe(options = {}) {
   const pidFilePath = options.pidFilePath ?? opencodePidFile;
   const logFile = options.logFile ?? opencodeLogFile;
   const errFile = options.errFile ?? opencodeErrFile;
+  const servePort = options.port ? Number(options.port) : null;
 
   // 幂等检查：PID 文件存在且进程健在
   const alivePid = readAlivePid(pidFilePath);
@@ -693,14 +702,19 @@ function startOpenCodeServe(options = {}) {
       fs.closeSync(stderrFd);
 
       const filePath = exe.type === 'node-script' ? exe.nodeExe : exe.exe;
-      const argList = exe.type === 'node-script'
+      const serveArgs = exe.type === 'node-script'
         ? [exe.script, 'serve']
         : ['serve'];
+      const argList = servePort !== null
+        ? [...serveArgs, '--port', String(servePort)]
+        : serveArgs;
 
       windowsHiddenPid = startHiddenOnWindows({ filePath, argList });
     } else if (exe.type === 'node-script') {
       // 非 Windows 不会走到这里，但保留以防万一
-      child = spawn(exe.nodeExe, [exe.script, 'serve'], {
+      const scriptArgs = [exe.script, 'serve'];
+      if (servePort !== null) scriptArgs.push('--port', String(servePort));
+      child = spawn(exe.nodeExe, scriptArgs, {
         detached: true,
         stdio: ['ignore', stdoutFd, stderrFd],
         windowsHide: true,
@@ -709,7 +723,9 @@ function startOpenCodeServe(options = {}) {
       fs.closeSync(stdoutFd);
       fs.closeSync(stderrFd);
     } else if (exe.type === 'direct') {
-      child = spawn(exe.exe, ['serve'], {
+      const directArgs = ['serve'];
+      if (servePort !== null) directArgs.push('--port', String(servePort));
+      child = spawn(exe.exe, directArgs, {
         detached: true,
         stdio: ['ignore', stdoutFd, stderrFd],
         windowsHide: true,
@@ -720,6 +736,7 @@ function startOpenCodeServe(options = {}) {
     } else {
       // Unix / 回退: opencode serve
       const args = ['serve'];
+      if (servePort !== null) args.push('--port', String(servePort));
       child = spawn(exe.cmd, args, {
         detached: true,
         stdio: ['ignore', stdoutFd, stderrFd],

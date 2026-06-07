@@ -460,7 +460,7 @@ describe('Resources API - Providers Endpoints', () => {
       setKey: vi.fn(),
       removeKey: vi.fn(),
       refreshModels: vi.fn(),
-      getModels: vi.fn(),
+      getModels: vi.fn(() => []),
       getAllModels: vi.fn(),
       getCustom: vi.fn(),
       upsertCustomProvider: vi.fn(),

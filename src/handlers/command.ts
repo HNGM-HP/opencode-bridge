@@ -27,67 +27,34 @@ import { sendFileToFeishu } from './file-sender.js';
 import { lifecycleHandler } from './lifecycle.js';
 import { DirectoryPolicy } from '../utils/directory-policy.js';
 import { executeCronIntent, resolveCronIntentForExecution } from '../reliability/cron-control.js';
-import { getRuntimeCronManager } from '../reliability/runtime-cron-registry.js';
+import { getRuntimeCronManager } from '../reliability/runtime-cron.js';
 import { formatRestartResultText, restartOpenCodeProcess } from '../reliability/opencode-restart.js';
 import { parseCronIntentWithOpenCode } from '../reliability/cron-semantic.js';
-import { cleanupRuntimeCronJobsBySessionId, scanAndCleanupOrphanRuntimeCronJobs } from '../reliability/runtime-cron-orphan.js';
+import { cleanupRuntimeCronJobsBySessionId, scanAndCleanupOrphanRuntimeCronJobs } from '../reliability/runtime-cron.js';
 import { isChatModelAllowed, parseChatModelReference } from '../utils/chat-model-whitelist.js';
 
-const INTERNAL_HIDDEN_AGENT_NAMES = new Set(['compaction', 'title', 'summary']);
-const PANEL_MODEL_OPTION_LIMIT = 500;
-const SESSION_CTL_OPTION_LIMIT = 100;
-const SESSION_CTL_EXISTING_LIMIT = SESSION_CTL_OPTION_LIMIT - 2;
-const EFFORT_USAGE_TEXT = '用法: /effort（查看） 或 /effort <low|high|max|xhigh>（设置） 或 /effort default（清除）';
-const EFFORT_DISPLAY_ORDER = KNOWN_EFFORT_LEVELS;
+import {
+  type ProviderModelMeta,
+  type EffortSupportInfo,
+  type BuiltinAgentTranslationRule,
+  INTERNAL_HIDDEN_AGENT_NAMES,
+  PANEL_MODEL_OPTION_LIMIT,
+  SESSION_CTL_OPTION_LIMIT,
+  SESSION_CTL_EXISTING_LIMIT,
+  EFFORT_USAGE_TEXT,
+  EFFORT_DISPLAY_ORDER,
+  BUILTIN_AGENT_TRANSLATION_RULES,
+} from './command-types.js';
 
-interface ProviderModelMeta {
-  providerId: string;
-  modelId: string;
-  modelName?: string;
-  variants: EffortLevel[];
-}
-
-interface EffortSupportInfo {
-  model: { providerId: string; modelId: string } | null;
-  supportedEfforts: EffortLevel[];
-  modelMatched: boolean;
-}
-
-interface BuiltinAgentTranslationRule {
-  names: string[];
-  descriptionStartsWith: string;
-  translated: string;
-}
-
-const BUILTIN_AGENT_TRANSLATION_RULES: BuiltinAgentTranslationRule[] = [
-  {
-    names: ['build', 'default'],
-    descriptionStartsWith: 'the default agent. executes tools based on configured permissions.',
-    translated: '默认执行角色（按权限自动调用工具）',
-  },
-  {
-    names: ['plan'],
-    descriptionStartsWith: 'plan mode. disallows all edit tools.',
-    translated: '规划模式（禁用编辑类工具）',
-  },
-  {
-    names: ['general'],
-    descriptionStartsWith: 'general-purpose agent for researching complex questions and executing multi-step tasks.',
-    translated: '通用研究子角色（复杂任务/并行执行）',
-  },
-  {
-    names: ['explore'],
-    descriptionStartsWith: 'fast agent specialized for exploring codebases.',
-    translated: '代码库探索子角色（快速检索与定位）',
-  },
-];
-
-function normalizeAgentText(text: string): string {
-  return text
-    .toLowerCase()
-    .replace(/\s+/g, ' ')
-    .trim();
-}
+import {
+  normalizeAgentText,
+  getDisplayWidth,
+  truncateByDisplayWidth,
+  isSameIdentifier,
+  sortEffortLevels,
+  getPrivateSessionShortId,
+  formatSessionOrderMode,
+} from './command-utils.js';
 
 export class CommandHandler {
   private static readonly FEISHU_MARKDOWN_CHUNK_LIMIT = 3800;
@@ -284,45 +251,14 @@ export class CommandHandler {
       shortcuts: this.getQcShortcuts(),
     }));
   }
-
-  private getDisplayWidth(text: string): number {
-    let width = 0;
-    for (const char of text) {
-      width += /[^\u0000-\u00ff]/.test(char) ? 2 : 1;
-    }
-    return width;
-  }
-
-  private truncateByDisplayWidth(text: string, maxWidth: number, mode: 'start' | 'end' = 'end'): string {
-    const normalized = text.trim();
-    if (!normalized) return '';
-    if (this.getDisplayWidth(normalized) <= maxWidth) return normalized;
-
-    const ellipsis = '...';
-    const targetWidth = Math.max(0, maxWidth - this.getDisplayWidth(ellipsis));
-    let collected = '';
-    let usedWidth = 0;
-    const chars = [...normalized];
-    const source = mode === 'start' ? [...chars].reverse() : chars;
-
-    for (const char of source) {
-      const charWidth = this.getDisplayWidth(char);
-      if (usedWidth + charWidth > targetWidth) break;
-      collected = mode === 'start' ? `${char}${collected}` : `${collected}${char}`;
-      usedWidth += charWidth;
-    }
-
-    return mode === 'start' ? `${ellipsis}${collected}` : `${collected}${ellipsis}`;
-  }
-
   private formatSessionCtlOptionLabel(session: Awaited<ReturnType<typeof opencodeClient.listSessions>>[number], highlightWorkspace: boolean): string {
     const title = typeof session.title === 'string' && session.title.trim().length > 0
       ? session.title.trim()
       : '未命名会话';
-    const compactTitle = this.truncateByDisplayWidth(title, 24, 'end');
+    const compactTitle = truncateByDisplayWidth(title, 24, 'end');
     const directory = session.directory?.trim() || '/';
     const shortId = session.id.slice(0, 8);
-    const compactDirectory = this.truncateByDisplayWidth(directory, 16, 'start');
+    const compactDirectory = truncateByDisplayWidth(directory, 16, 'start');
     const workspaceLabel = highlightWorkspace ? compactDirectory : compactDirectory;
     return `${workspaceLabel} / ${shortId} / ${compactTitle}`;
   }
@@ -460,11 +396,6 @@ export class CommandHandler {
   public getSessionOrderMode(chatId: string): SessionOrderMode {
     return chatSessionStore.getSession(chatId)?.sessionOrderMode || 'default';
   }
-
-  private formatSessionOrderMode(mode: SessionOrderMode): string {
-    return mode === 'last_time' ? '按最后修改时间倒序' : '默认排序';
-  }
-
   private async handleConfig(chatId: string, messageId: string, command: ParsedCommand): Promise<void> {
     if (command.configScope !== 'session' || !command.configKey) {
       await this.replyFeishuMarkdown(
@@ -558,7 +489,7 @@ export class CommandHandler {
         chatId,
         '⚙️ 会话排序配置',
         [
-          `当前模式：**${this.formatSessionOrderMode(mode)}**`,
+          `当前模式：**${formatSessionOrderMode(mode)}**`,
           '',
           '可选值：',
           '- `default` 默认排序',
@@ -584,7 +515,7 @@ export class CommandHandler {
       messageId,
       chatId,
       '✅ 会话排序配置已更新',
-      `当前模式已切换为：**${this.formatSessionOrderMode(command.configValue)}**`,
+      `当前模式已切换为：**${formatSessionOrderMode(command.configValue)}**`,
       'green'
     );
   }
@@ -692,25 +623,8 @@ export class CommandHandler {
       efforts.push(normalized);
     }
 
-    return this.sortEffortLevels(efforts);
+    return sortEffortLevels(efforts);
   }
-
-  private sortEffortLevels(efforts: EffortLevel[]): EffortLevel[] {
-    const order = new Map<string, number>();
-    EFFORT_DISPLAY_ORDER.forEach((value, index) => {
-      order.set(value, index);
-    });
-
-    return [...efforts].sort((left, right) => {
-      const leftOrder = order.get(left) ?? Number.MAX_SAFE_INTEGER;
-      const rightOrder = order.get(right) ?? Number.MAX_SAFE_INTEGER;
-      if (leftOrder !== rightOrder) {
-        return leftOrder - rightOrder;
-      }
-      return left.localeCompare(right);
-    });
-  }
-
   private extractProviderModels(provider: unknown): ProviderModelMeta[] {
     if (!provider || typeof provider !== 'object') {
       return [];
@@ -796,11 +710,6 @@ export class CommandHandler {
 
     return models;
   }
-
-  private isSameIdentifier(left: string, right: string): boolean {
-    return left.trim().toLowerCase() === right.trim().toLowerCase();
-  }
-
   private findProviderModel(
     providers: unknown[],
     providerId: string,
@@ -809,10 +718,10 @@ export class CommandHandler {
     for (const provider of providers) {
       const providerModels = this.extractProviderModels(provider);
       for (const model of providerModels) {
-        if (!this.isSameIdentifier(model.providerId, providerId)) {
+        if (!isSameIdentifier(model.providerId, providerId)) {
           continue;
         }
-        if (!this.isSameIdentifier(model.modelId, modelId)) {
+        if (!isSameIdentifier(model.modelId, modelId)) {
           continue;
         }
         return model;
@@ -1051,12 +960,6 @@ export class CommandHandler {
       }
     })();
   }
-
-  private getPrivateSessionShortId(userId: string): string {
-    const normalized = userId.startsWith('ou_') ? userId.slice(3) : userId;
-    return normalized.slice(0, 4);
-  }
-
   private buildSessionTitle(chatType: 'p2p' | 'group', _userId: string): string {
     const timestamp = buildSessionTimestamp();
     if (chatType === 'p2p') {

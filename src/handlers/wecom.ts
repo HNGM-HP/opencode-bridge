@@ -27,138 +27,25 @@ import {
   isChatModelAllowed,
   parseChatModelReference,
 } from '../utils/chat-model-whitelist.js';
+import {
+  ATTACHMENT_BASE_DIR,
+  ALLOWED_ATTACHMENT_EXTENSIONS,
+  WECOM_MESSAGE_LIMIT,
+  type OpencodeFilePartInput,
+  type OpencodePartInput,
+  type PermissionDecision,
+} from './wecom-types.js';
 
-// 附件相关配置
-const ATTACHMENT_BASE_DIR = path.resolve(process.cwd(), 'tmp', 'wecom-uploads');
-const ALLOWED_ATTACHMENT_EXTENSIONS = new Set([
-  '.png', '.jpg', '.jpeg', '.gif', '.webp', '.pdf',
-  '.pjp', '.pjpeg', '.jfif', '.jpe'
-]);
+import {
+  extractExtension,
+  normalizeExtension,
+  extensionFromContentType,
+  mimeFromExtension,
+  sanitizeFilename,
+  extractFilenameFromUrl,
+  parsePermissionDecision,
+} from './wecom-utils.js';
 
-const WECOM_MESSAGE_LIMIT = 1800;
-
-// 文件类型检测辅助函数
-function extractExtension(name: string): string {
-  return path.extname(name).toLowerCase();
-}
-
-function normalizeExtension(ext: string): string {
-  if (!ext) return '';
-  const withDot = ext.startsWith('.') ? ext.toLowerCase() : `.${ext.toLowerCase()}`;
-  if (withDot === '.jpeg' || withDot === '.pjpeg' || withDot === '.pjp' || withDot === '.jpe' || withDot === '.jfif') {
-    return '.jpg';
-  }
-  return withDot;
-}
-
-function extensionFromContentType(contentType: string): string {
-  const type = contentType.split(';')[0]?.trim().toLowerCase();
-  if (type === 'image/png') return '.png';
-  if (type === 'image/jpeg') return '.jpg';
-  if (type === 'image/gif') return '.gif';
-  if (type === 'image/webp') return '.webp';
-  if (type === 'application/pdf') return '.pdf';
-  return '';
-}
-
-function mimeFromExtension(ext: string): string {
-  switch (ext) {
-    case '.png':
-      return 'image/png';
-    case '.jpg':
-    case '.jpeg':
-    case '.pjpeg':
-    case '.pjp':
-    case '.jfif':
-    case '.jpe':
-      return 'image/jpeg';
-    case '.gif':
-      return 'image/gif';
-    case '.webp':
-      return 'image/webp';
-    case '.pdf':
-      return 'application/pdf';
-    default:
-      return 'application/octet-stream';
-  }
-}
-
-function sanitizeFilename(name: string): string {
-  const cleaned = name.replace(/[\\/:*?"<>|]+/g, '_').trim();
-  return cleaned || 'attachment';
-}
-
-// 从 URL 中提取文件名
-function extractFilenameFromUrl(url: string): string {
-  try {
-    const urlObj = new URL(url);
-    const pathname = urlObj.pathname;
-    const segments = pathname.split('/');
-    const lastSegment = segments[segments.length - 1];
-    if (lastSegment && lastSegment.includes('.')) {
-      return decodeURIComponent(lastSegment);
-    }
-  } catch {
-    // URL 解析失败，忽略
-  }
-  return 'attachment';
-}
-
-type OpencodeFilePartInput = { type: 'file'; mime: string; url: string; filename?: string };
-type OpencodePartInput = { type: 'text'; text: string } | OpencodeFilePartInput;
-
-// 权限决策解析结果
-type PermissionDecision = {
-  allow: boolean;
-  remember: boolean;
-};
-
-// 解析用户的权限决策文本
-function parsePermissionDecision(raw: string): PermissionDecision | null {
-  const normalized = raw.normalize('NFKC').trim().toLowerCase();
-  if (!normalized) return null;
-
-  const compact = normalized
-    .replace(/[\s\u3000]+/g, '')
-    .replace(/[。！!,.，；;:：\-]/g, '');
-
-  const hasAlways =
-    compact.includes('始终') ||
-    compact.includes('永久') ||
-    compact.includes('always') ||
-    compact.includes('记住') ||
-    compact.includes('总是');
-
-  const containsAny = (words: string[]): boolean => {
-    return words.some(word => compact === word || compact.includes(word));
-  };
-
-  const isDeny =
-    compact === 'n' ||
-    compact === 'no' ||
-    compact === '否' ||
-    compact === '拒绝' ||
-    containsAny(['拒绝', '不同意', '不允许', 'deny']);
-
-  if (isDeny) {
-    return { allow: false, remember: false };
-  }
-
-  const isAllow =
-    compact === 'y' ||
-    compact === 'yes' ||
-    compact === 'ok' ||
-    compact === 'always' ||
-    compact === '允许' ||
-    compact === '始终允许' ||
-    containsAny(['允许', '同意', '通过', '批准', 'allow']);
-
-  if (isAllow) {
-    return { allow: true, remember: hasAlways };
-  }
-
-  return null;
-}
 
 export class WeComHandler {
   private ensureStreamingBuffer(chatId: string, sessionId: string): void {

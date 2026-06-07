@@ -145,7 +145,16 @@ describe('DiscordHandler permission text flow', () => {
     } as never);
     const compactSpy = vi.spyOn(opencodeClient, 'summarizeSession').mockResolvedValue(true);
 
+    // 清除默认 Provider/Model 配置，确保走 getProviders 路径
+    const savedProvider = process.env.DEFAULT_PROVIDER;
+    const savedModel = process.env.DEFAULT_MODEL;
+    process.env.DEFAULT_PROVIDER = '';
+    process.env.DEFAULT_MODEL = '';
+
     await handler.handleMessage(makeEvent('///compat'));
+
+    process.env.DEFAULT_PROVIDER = savedProvider;
+    process.env.DEFAULT_MODEL = savedModel;
 
     expect(compactSpy).toHaveBeenCalledWith('session-compact-1', 'openai', 'gpt-5');
     expect(sender.sendText).toHaveBeenCalledTimes(1);
@@ -189,8 +198,26 @@ describe('DiscordHandler permission text flow', () => {
       info: { id: 'msg-ai-1' },
       parts: [{ type: 'text', text: '分析完成' }],
     } as never);
+    // 模拟 getProviders 避免触发真实 OpenCode 连接
+    vi.spyOn(opencodeClient, 'getProviders').mockResolvedValue({
+      providers: [
+        {
+          id: 'openai',
+          models: [{ id: 'gpt-5', variants: { xhigh: {} } }],
+        },
+      ],
+    } as never);
+
+    // 清除默认 Provider/Model 配置，确保走 getProviders 路径
+    const savedProvider = process.env.DEFAULT_PROVIDER;
+    const savedModel = process.env.DEFAULT_MODEL;
+    process.env.DEFAULT_PROVIDER = '';
+    process.env.DEFAULT_MODEL = '';
 
     await handler.handleMessage(makeEvent('#xhigh 帮我分析代码'));
+
+    process.env.DEFAULT_PROVIDER = savedProvider;
+    process.env.DEFAULT_MODEL = savedModel;
 
     expect(sendMessageSpy).toHaveBeenCalledWith(
       'session-prompt-1',
