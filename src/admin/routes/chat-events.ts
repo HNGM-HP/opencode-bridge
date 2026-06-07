@@ -11,6 +11,13 @@ interface SSEQuery {
 function writeEvent(res: Response, addressedEvent: AddressedChatEvent): void {
   const data = JSON.stringify(addressedEvent.event);
   res.write(`id: ${addressedEvent.seq}\nevent: ${addressedEvent.event.type}\ndata: ${data}\n\n`);
+
+  // Windows SSE 强制刷新：Node.js 在 Windows 上通过 IOCP 写入 socket，
+  // 小包 SSE 数据可能延迟推送。显式 uncork() 确保数据立即到达内核缓冲区。
+  // 即使没有对应的 cork()，uncork() 也是安全无操作的。
+  if (res.socket && !res.destroyed && res.socket.writable) {
+    res.socket.uncork();
+  }
 }
 
 function parseSinceSeq(req: Request): number | undefined {
@@ -31,7 +38,7 @@ function parseSinceSeq(req: Request): number | undefined {
   return undefined;
 }
 
-export async function sseHandler(req: Request, res: Response): Promise<void> {
+export function sseHandler(req: Request, res: Response): void {
   const query = req.query as SSEQuery;
   const sessionId = typeof query.session_id === 'string' ? query.session_id : undefined;
   const sinceSeq = parseSinceSeq(req);
@@ -47,9 +54,11 @@ export async function sseHandler(req: Request, res: Response): Promise<void> {
   res.setHeader('Cache-Control', 'no-cache, no-transform');
   res.setHeader('Connection', 'keep-alive');
   res.setHeader('X-Accel-Buffering', 'no');
-  res.flushHeaders?.();
+  res.flushHeaders();
 
   res.write(`id: 0\nevent: connected\ndata: {"clientId":"${clientId}"}\n\n`);
+  // 初始 write 后立即 flush，确保浏览器收到 connected 事件
+  if (res.socket?.writable) res.socket.uncork();
 
   const eventHandler = (addressedEvent: AddressedChatEvent) => {
     if (sessionId && addressedEvent.sessionId !== sessionId) {
@@ -79,6 +88,7 @@ export async function sseHandler(req: Request, res: Response): Promise<void> {
   // 5s 心跳：足够穿透 Windows TCP keepalive/中间反代的空闲超时，又不会显著增加流量。
   const keepalive = setInterval(() => {
     res.write('event: keepalive\ndata: {"type":"keepalive"}\n\n');
+    if (res.socket?.writable) res.socket.uncork();
   }, 5000);
 
   console.log('[Chat Events] SSE client connected:', clientId, sessionId);
