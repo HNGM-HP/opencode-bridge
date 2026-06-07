@@ -8,7 +8,7 @@ import {
   cleanupRuntimeCronJobsByConversation,
   cleanupRuntimeCronJobsBySessionId,
   scanAndCleanupOrphanRuntimeCronJobs,
-} from '../src/reliability/runtime-cron-orphan.js';
+} from '../src/reliability/runtime-cron.js';
 
 function createManager(): RuntimeCronManager {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'runtime-cron-orphan-'));

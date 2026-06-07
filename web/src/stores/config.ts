@@ -1,112 +1,67 @@
+/**
+ * 配置状态管理（组合入口）
+ *
+ * 向后兼容：保留 useConfigStore，同时导出各领域子 store
+ * 新代码建议按需导入子 store:
+ *   import { useSettingsStore } from '../stores/config'
+ */
+
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
-import { configApi, type BridgeSettings, type CronJob, type ServiceStatus, type CreateCronJobInput, type SessionInfo, type ModelProvider } from '../api/index'
+import { computed } from 'vue'
+import { useSettingsStore } from './settings'
+import { useCronStore } from './cron'
+import { useAppStore } from './app'
+import { useModelsStore } from './models'
 
+export { useSettingsStore }
+export { useCronStore }
+export { useAppStore }
+export { useModelsStore }
+
+// 组合 store（向后兼容原有的 useConfigStore）
 export const useConfigStore = defineStore('config', () => {
-  const settings = ref<BridgeSettings>({})
-  const cronJobs = ref<CronJob[]>([])
-  const status = ref<ServiceStatus | null>(null)
-  const sessions = ref<SessionInfo[]>([])
-  const modelProviders = ref<ModelProvider[]>([])
-  const loading = ref(false)
-  const initialized = ref(false)
-  const pendingRestart = ref(false)
-  const pendingRestartKeys = ref<string[]>([])
+  // 动态导入子 store 避免循环依赖
+  const settingsStore = useSettingsStore()
+  const cronStore = useCronStore()
+  const appStore = useAppStore()
+  const modelsStore = useModelsStore()
 
-  const cronJobCount = computed(() => cronJobs.value.length)
-  const runningJobCount = computed(() => cronJobs.value.filter(j => j.enabled).length)
+  // 组合状态
+  const settings = computed(() => settingsStore.settings)
+  const cronJobs = computed(() => cronStore.cronJobs)
+  const status = computed(() => appStore.status)
+  const sessions = computed(() => appStore.sessions)
+  const modelProviders = computed(() => modelsStore.modelProviders)
+  const loading = computed(() => appStore.loading)
+  const initialized = computed(() => appStore.initialized)
+  const pendingRestart = computed(() => settingsStore.pendingRestart)
+  const pendingRestartKeys = computed(() => settingsStore.pendingRestartKeys)
+  const cronJobCount = computed(() => cronStore.cronJobCount)
+  const runningJobCount = computed(() => cronStore.runningJobCount)
 
-  async function fetchConfig() {
-    loading.value = true
-    try {
-      settings.value = await configApi.getConfig()
-    } finally {
-      loading.value = false
-    }
-  }
-
-  async function saveConfig(partial: BridgeSettings) {
-    const result = await configApi.saveConfig({ ...settings.value, ...partial })
-    settings.value = { ...settings.value, ...partial }
-    if (result.needRestart) {
-      pendingRestart.value = true
-      pendingRestartKeys.value = result.changedKeys
-    }
-    return result
-  }
-
-  async function fetchCronJobs() {
-    cronJobs.value = await configApi.getCronJobs()
-  }
-
-  async function toggleCronJob(id: string) {
-    const updated = await configApi.toggleCronJob(id)
-    const idx = cronJobs.value.findIndex(j => j.id === id)
-    if (idx !== -1) cronJobs.value[idx] = updated
-  }
-
-  async function deleteCronJob(id: string) {
-    await configApi.deleteCronJob(id)
-    cronJobs.value = cronJobs.value.filter(j => j.id !== id)
-  }
-
-  async function createCronJob(input: CreateCronJobInput) {
-    const created = await configApi.createCronJob(input)
-    cronJobs.value = [...cronJobs.value, created]
-  }
-
-  async function fetchStatus() {
-    status.value = await configApi.getStatus()
-  }
-
-  async function fetchSessions() {
-    const data = await configApi.getSessions()
-    // 将各平台会话合并，并添加 platform 字段
-    const feishuSessions = (data.feishu || []).map(s => ({ ...s, platform: 'feishu' as const }))
-    const discordSessions = (data.discord || []).map(s => ({ ...s, platform: 'discord' as const }))
-    const wecomSessions = (data.wecom || []).map(s => ({ ...s, platform: 'wecom' as const }))
-    const telegramSessions = (data.telegram || []).map(s => ({ ...s, platform: 'telegram' as const }))
-    const qqSessions = (data.qq || []).map(s => ({ ...s, platform: 'qq' as const }))
-    const whatsappSessions = (data.whatsapp || []).map(s => ({ ...s, platform: 'whatsapp' as const }))
-    sessions.value = [...feishuSessions, ...discordSessions, ...wecomSessions, ...telegramSessions, ...qqSessions, ...whatsappSessions]
-  }
-
-  async function fetchModels() {
-    const data = await configApi.getModels()
-    modelProviders.value = data.providers
-  }
-
-  async function initializeAll() {
-    if (initialized.value) return
-    loading.value = true
-    try {
-      await Promise.all([
-        fetchConfig(),
-        fetchStatus(),
-        fetchCronJobs(),
-        fetchSessions(),
-        fetchModels(),
-      ])
-      initialized.value = true
-    } finally {
-      loading.value = false
-    }
-  }
-
-  async function restart() {
-    await configApi.restart()
-    pendingRestart.value = false
-    pendingRestartKeys.value = []
-  }
+  // 组合方法
+  const fetchConfig = () => settingsStore.fetchConfig()
+  const saveConfig = (partial: any) => settingsStore.saveConfig(partial)
+  const restart = () => settingsStore.restart()
+  const fetchCronJobs = () => cronStore.fetchCronJobs()
+  const toggleCronJob = (id: string) => cronStore.toggleCronJob(id)
+  const deleteCronJob = (id: string) => cronStore.deleteCronJob(id)
+  const createCronJob = (input: any) => cronStore.createCronJob(input)
+  const fetchStatus = () => appStore.fetchStatus()
+  const fetchSessions = () => appStore.fetchSessions()
+  const fetchModels = () => modelsStore.fetchModels()
+  const initializeAll = () => appStore.initializeAll()
 
   return {
+    // 状态
     settings, cronJobs, status, sessions, modelProviders,
     loading, initialized,
     pendingRestart, pendingRestartKeys,
     cronJobCount, runningJobCount,
-    fetchConfig, saveConfig,
+    // 方法
+    fetchConfig, saveConfig, restart,
     fetchCronJobs, toggleCronJob, deleteCronJob, createCronJob,
     fetchStatus, fetchSessions, fetchModels,
-    initializeAll, restart,
+    initializeAll,
   }
 })

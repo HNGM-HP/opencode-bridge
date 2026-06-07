@@ -7,9 +7,11 @@
 
 import { modelConfig, attachmentConfig } from '../config.js';
 import { opencodeClient } from '../opencode/client.js';
+import { preprocessVisionParts, type VisionPart } from '../services/vision-ocr.js';
 import { outputBuffer } from '../opencode/output-buffer.js';
-import { chatSessionStore } from '../store/chat-session.js';
+import { chatSessionStore, type SessionOrderMode } from '../store/chat-session.js';
 import { parseCommand, type ParsedCommand } from '../commands/parser.js';
+import { normalizeEffortLevel, type EffortLevel } from '../commands/effort.js';
 import { DirectoryPolicy } from '../utils/directory-policy.js';
 import { buildSessionTimestamp } from '../utils/session-title.js';
 import { shouldSkipGroupMessage } from '../utils/group-mention.js';
@@ -17,175 +19,167 @@ import { permissionHandler } from '../permissions/handler.js';
 import { questionHandler, type PendingQuestion } from '../opencode/question-handler.js';
 import { parseQuestionAnswerText } from '../opencode/question-parser.js';
 import type { PlatformMessageEvent, PlatformSender } from '../platform/types.js';
-import type { EffortLevel } from '../commands/effort.js';
+import {
+  collectAllowedChatModels,
+  findAllowedChatModel,
+  isChatModelAllowed,
+  parseChatModelReference,
+} from '../utils/chat-model-whitelist.js';
 import { randomUUID } from 'crypto';
 import path from 'path';
 import { promises as fs } from 'fs';
 import axios from 'axios';
 
-type OpencodeFilePartInput = { type: 'file'; mime: string; url: string; filename?: string };
-type OpencodePartInput = { type: 'text'; text: string } | OpencodeFilePartInput;
+import {
+  ATTACHMENT_BASE_DIR,
+  ALLOWED_ATTACHMENT_EXTENSIONS,
+  QQ_CARD_SOFT_LIMIT,
+  type OpencodeFilePartInput,
+  type OpencodePartInput,
+  type PermissionDecision,
+  type QQSessionInfo,
+} from './qq-types.js';
 
-// 附件相关配置
-const ATTACHMENT_BASE_DIR = path.resolve(process.cwd(), 'tmp', 'qq-uploads');
-const ALLOWED_ATTACHMENT_EXTENSIONS = new Set([
-  '.png', '.jpg', '.jpeg', '.gif', '.webp', '.pdf',
-  '.pjp', '.pjpeg', '.jfif', '.jpe',
-  '.mp4', '.mp3', '.wav', '.ogg', '.m4a'
-]);
+import {
+  extractExtension,
+  normalizeExtension,
+  extensionFromContentType,
+  mimeFromExtension,
+  sanitizeFilename,
+  parsePermissionDecision,
+  getQQHelpText,
+  getQQHelpMarkdown,
+  buildQQCmdInput,
+} from './qq-utils.js';
 
-// Helper functions for file type detection
-function extractExtension(name: string): string {
-  return path.extname(name).toLowerCase();
-}
-
-function normalizeExtension(ext: string): string {
-  if (!ext) return '';
-  const withDot = ext.startsWith('.') ? ext.toLowerCase() : `.${ext.toLowerCase()}`;
-  if (withDot === '.jpeg' || withDot === '.pjpeg' || withDot === '.pjp' || withDot === '.jpe' || withDot === '.jfif') {
-    return '.jpg';
-  }
-  return withDot;
-}
-
-function extensionFromContentType(contentType: string): string {
-  const ct = contentType.toLowerCase().split(';')[0].trim();
-  const map: Record<string, string> = {
-    'image/jpeg': '.jpg',
-    'image/png': '.png',
-    'image/gif': '.gif',
-    'image/webp': '.webp',
-    'application/pdf': '.pdf',
-    'video/mp4': '.mp4',
-    'audio/mpeg': '.mp3',
-    'audio/wav': '.wav',
-    'audio/ogg': '.ogg',
-    'audio/mp4': '.m4a',
-  };
-  return map[ct] || '';
-}
-
-function mimeFromExtension(ext: string): string {
-  const map: Record<string, string> = {
-    '.jpg': 'image/jpeg',
-    '.jpeg': 'image/jpeg',
-    '.png': 'image/png',
-    '.gif': 'image/gif',
-    '.webp': 'image/webp',
-    '.pdf': 'application/pdf',
-    '.mp4': 'video/mp4',
-    '.mp3': 'audio/mpeg',
-    '.wav': 'audio/wav',
-    '.ogg': 'audio/ogg',
-    '.m4a': 'audio/mp4',
-  };
-  return map[ext] || 'application/octet-stream';
-}
-
-function sanitizeFilename(name: string): string {
-  return name
-    .replace(/[<>:"/\\|?*\x00-\x1f]/g, '_')
-    .replace(/\.{2,}/g, '.')
-    .slice(0, 200);
-}
-
-// 权限决策类型
-type PermissionDecision = {
-  allow: boolean;
-  remember: boolean;
-};
-
-// 解析用户文本权限决策
-function parsePermissionDecision(raw: string): PermissionDecision | null {
-  const normalized = raw.normalize('NFKC').trim().toLowerCase();
-  if (!normalized) return null;
-
-  const compact = normalized
-    .replace(/[\s\u3000]+/g, '')
-    .replace(/[。！!,.，；;:：\-]/g, '');
-
-  const hasAlways =
-    compact.includes('始终') ||
-    compact.includes('永久') ||
-    compact.includes('always') ||
-    compact.includes('记住') ||
-    compact.includes('总是');
-
-  const containsAny = (words: string[]): boolean => {
-    return words.some(word => compact === word || compact.includes(word));
-  };
-
-  // 数字快捷回复：1=允许，2=拒绝，3=始终允许
-  if (compact === '1') return { allow: true, remember: false };
-  if (compact === '2') return { allow: false, remember: false };
-  if (compact === '3') return { allow: true, remember: true };
-
-  const isDeny =
-    compact === 'n' ||
-    compact === 'no' ||
-    compact === '否' ||
-    compact === '拒绝' ||
-    containsAny(['拒绝', '不同意', '不允许', 'deny']);
-  if (isDeny) {
-    return { allow: false, remember: false };
-  }
-
-  const isAllow =
-    compact === 'y' ||
-    compact === 'yes' ||
-    compact === 'ok' ||
-    compact === 'always' ||
-    compact === '允许' ||
-    compact === '始终允许' ||
-    containsAny(['允许', '同意', '通过', '批准', 'allow']);
-  if (isAllow) {
-    return { allow: true, remember: hasAlways };
-  }
-
-  return null;
-}
-
-// QQ 帮助文本
-function getQQHelpText(): string {
-  return `QQ × OpenCode 机器人指南
-
-如何对话
-直接发送消息即可与 AI 对话。
-
-常用命令
-/model - 查看当前模型
-/model <名称> - 切换模型
-/models - 列出所有可用模型
-/agent - 查看当前角色
-/agent <名称> - 切换角色
-/agents - 列出所有可用角色
-/agent off - 切回默认角色
-/status - 查看当前状态
-/session - 列出当前项目的会话
-/session new - 开启新话题
-/sessions all - 列出所有会话
-/clear - 清空对话上下文
-/stop - 停止当前生成
-/help - 显示此帮助
-
-权限确认
-当 AI 需要执行敏感操作时，会发送权限确认消息。
-回复 1 或 允许 - 同意执行
-回复 2 或 拒绝 - 不同意执行
-回复 3 或 始终允许 - 同意并记住此工具
-
-问答互动
-当 AI 需要您的反馈时，会发送问答消息。
-回复选项编号（如 1、2）选择对应选项
-回复多个编号（如 1 3）可多选
-直接输入文字可提交自定义答案
-回复"跳过"可跳过当前问题
-
-提示
-切换的模型/角色仅对当前会话生效。`;
-}
 
 export class QQHandler {
+  private getSessionOrderMode(chatId: string): SessionOrderMode {
+    return chatSessionStore.getSessionByConversation('qq', chatId)?.sessionOrderMode || 'default';
+  }
+
+  private formatSessionOrderMode(mode: SessionOrderMode): string {
+    return mode === 'last_time' ? '按最后修改时间倒序' : '默认排序';
+  }
+
+  private isQQOnlyTextEnabled(chatId: string): boolean {
+    return chatSessionStore.getSessionByConversation('qq', chatId)?.qqOutputOnlyText === true;
+  }
+
+  private getSessionLastModifiedTime(session: QQSessionInfo): number {
+    return session.time?.updated ?? session.time?.created ?? 0;
+  }
+
+  private async resolveSessionLastActivityMap(sessions: QQSessionInfo[]): Promise<Map<string, number>> {
+    const entries = await Promise.all(
+      sessions.map(async session => {
+        try {
+          const activityTime = await opencodeClient.getSessionLastActivityTime(session.id);
+          return [session.id, activityTime || this.getSessionLastModifiedTime(session)] as const;
+        } catch {
+          return [session.id, this.getSessionLastModifiedTime(session)] as const;
+        }
+      })
+    );
+
+    return new Map(entries);
+  }
+
+  private async sortSessions(chatId: string, sessions: QQSessionInfo[]): Promise<QQSessionInfo[]> {
+    const sessionOrderMode = this.getSessionOrderMode(chatId);
+    const sessionLastActivityMap = sessionOrderMode === 'last_time'
+      ? await this.resolveSessionLastActivityMap(sessions)
+      : null;
+
+    return [...sessions].sort((a, b) => {
+      if (sessionOrderMode === 'last_time') {
+        const left = sessionLastActivityMap?.get(a.id) ?? this.getSessionLastModifiedTime(a);
+        const right = sessionLastActivityMap?.get(b.id) ?? this.getSessionLastModifiedTime(b);
+        if (left !== right) return right - left;
+        return a.id.localeCompare(b.id, 'en');
+      }
+
+      const directoryCompare = (a.directory || '/').localeCompare((b.directory || '/'), 'zh-Hans-CN');
+      if (directoryCompare !== 0) return directoryCompare;
+      const left = this.getSessionLastModifiedTime(b);
+      const right = this.getSessionLastModifiedTime(a);
+      if (left !== right) return left - right;
+      return a.id.localeCompare(b.id, 'en');
+    });
+  }
+
+  private async sendQQCard(
+    chatId: string,
+    sender: PlatformSender,
+    payload: { markdown: string; qqText: string }
+  ): Promise<void> {
+    if (this.isQQOnlyTextEnabled(chatId)) {
+      await sender.sendCard(chatId, {
+        qqText: payload.qqText,
+        forcePlainText: true,
+      });
+      return;
+    }
+
+    await sender.sendCard(chatId, payload);
+  }
+
+  private async sendQQPagedCard(
+    chatId: string,
+    sender: PlatformSender,
+    introMarkdownLines: string[],
+    introTextLines: string[],
+    sections: Array<{ markdown: string; text: string }>
+  ): Promise<void> {
+    if (sections.length === 0) {
+      await this.sendQQCard(chatId, sender, {
+        markdown: introMarkdownLines.join('\n'),
+        qqText: introTextLines.join('\n'),
+      });
+      return;
+    }
+
+    const pages: Array<{ markdown: string; qqText: string }> = [];
+    let currentMarkdown = introMarkdownLines.join('\n');
+    let currentText = introTextLines.join('\n');
+
+    const pushPage = (): void => {
+      pages.push({ markdown: currentMarkdown, qqText: currentText });
+      currentMarkdown = introMarkdownLines.join('\n');
+      currentText = introTextLines.join('\n');
+    };
+
+    for (const section of sections) {
+      const nextMarkdown = currentMarkdown ? `${currentMarkdown}\n${section.markdown}` : section.markdown;
+      const nextText = currentText ? `${currentText}\n${section.text}` : section.text;
+
+      if (nextMarkdown.length > QQ_CARD_SOFT_LIMIT || nextText.length > QQ_CARD_SOFT_LIMIT) {
+        if (currentMarkdown !== introMarkdownLines.join('\n') || currentText !== introTextLines.join('\n')) {
+          pushPage();
+        }
+
+        if (section.markdown.length > QQ_CARD_SOFT_LIMIT || section.text.length > QQ_CARD_SOFT_LIMIT) {
+          pages.push({ markdown: section.markdown, qqText: section.text });
+          continue;
+        }
+
+        currentMarkdown = introMarkdownLines.join('\n');
+        currentText = introTextLines.join('\n');
+      }
+
+      currentMarkdown = currentMarkdown ? `${currentMarkdown}\n${section.markdown}` : section.markdown;
+      currentText = currentText ? `${currentText}\n${section.text}` : section.text;
+    }
+
+    if (currentMarkdown !== introMarkdownLines.join('\n') || currentText !== introTextLines.join('\n')) {
+      pages.push({ markdown: currentMarkdown, qqText: currentText });
+    }
+
+    for (const page of pages) {
+      await this.sendQQCard(chatId, sender, page);
+    }
+  }
+
   private ensureStreamingBuffer(chatId: string, sessionId: string): void {
     const key = `chat:qq:${chatId}`;
     const current = outputBuffer.get(key);
@@ -503,7 +497,10 @@ export class QQHandler {
   ): Promise<void> {
     switch (command.type) {
       case 'help':
-        await sender.sendText(chatId, getQQHelpText());
+        await this.sendQQCard(chatId, sender, {
+          markdown: getQQHelpMarkdown(),
+          qqText: getQQHelpText(),
+        });
         break;
 
       case 'status': {
@@ -518,6 +515,10 @@ export class QQHandler {
       case 'session':
       case 'sessions':
         await this.handleSessionCommand(command, chatId, senderId, sender);
+        break;
+
+      case 'config':
+        await this.handleConfigCommand(command, chatId, sender);
         break;
 
       case 'model':
@@ -630,18 +631,49 @@ export class QQHandler {
         return;
       }
 
-      const lines: string[] = ['会话列表:'];
-      for (const session of sessions.slice(0, 20)) {
+      const sortedSessions = await this.sortSessions(chatId, sessions);
+      const mode = this.getSessionOrderMode(chatId);
+
+      const introMarkdownLines: string[] = [
+        `# 会话列表`,
+        ``,
+        `当前排序：**${this.formatSessionOrderMode(mode)}**`,
+        listAll ? `范围：**全部项目**` : `范围：**当前项目**`,
+        ``,
+        `使用 ${buildQQCmdInput('/session ', '/session <session id>')} 切换会话`,
+        ``,
+      ];
+      const introTextLines: string[] = [
+        '会话列表:',
+        `当前排序: ${this.formatSessionOrderMode(mode)}`,
+        `范围: ${listAll ? '全部项目' : '当前项目'}`,
+        '使用 /session <session id> 切换会话',
+        '',
+      ];
+      const sections: Array<{ markdown: string; text: string }> = [];
+
+      for (const session of sortedSessions) {
         const title = session.title || '未命名';
         const shortId = session.id.slice(0, 8);
-        lines.push(`- ${shortId}: ${title}`);
+        sections.push({
+          markdown: `- ${buildQQCmdInput(session.id, `${shortId}: ${title}`)}`,
+          text: `- ${shortId}: ${title}`,
+        });
       }
 
-      if (sessions.length > 20) {
-        lines.push(`... 共 ${sessions.length} 个会话`);
+      sections.push({
+        markdown: `共 ${sortedSessions.length} 个会话`,
+        text: `共 ${sortedSessions.length} 个会话`,
+      });
+
+      if (!listAll) {
+        sections.push({
+          markdown: `提示：使用 ${buildQQCmdInput('/sessions all')} 查看所有项目会话`,
+          text: '提示: 使用 /sessions all 查看所有项目会话',
+        });
       }
 
-      await sender.sendText(chatId, lines.join('\n'));
+      await this.sendQQPagedCard(chatId, sender, introMarkdownLines, introTextLines, sections);
     } catch (error) {
       console.error('[QQ] 获取会话列表失败:', error);
       await sender.sendText(chatId, '获取会话列表失败');
@@ -677,39 +709,28 @@ export class QQHandler {
       const providersResult = await opencodeClient.getProviders();
       const providers = Array.isArray(providersResult.providers) ? providersResult.providers : [];
 
-      let matchedModel: { providerId: string; modelId: string } | null = null;
-      for (const provider of providers) {
-        const providerId = (provider as Record<string, unknown>)?.id as string | undefined;
-        const models = (provider as Record<string, unknown>)?.models;
-        if (!providerId || !models) continue;
-
-        const modelList = Array.isArray(models) ? models : Object.values(models as Record<string, unknown>);
-        for (const model of modelList) {
-          const modelId = (model as Record<string, unknown>)?.id as string | undefined;
-          if (!modelId) continue;
-
-          if (
-            modelId.toLowerCase() === normalizedModelName.toLowerCase() ||
-            `${providerId}:${modelId}`.toLowerCase() === normalizedModelName.toLowerCase()
-          ) {
-            matchedModel = { providerId, modelId };
-            break;
-          }
-        }
-        if (matchedModel) break;
-      }
+      const matchedModel = findAllowedChatModel(providers, normalizedModelName);
 
       if (matchedModel) {
         chatSessionStore.updateConfigByConversation('qq', chatId, {
           preferredModel: `${matchedModel.providerId}:${matchedModel.modelId}`,
         });
         await sender.sendText(chatId, `已切换模型: ${matchedModel.providerId}:${matchedModel.modelId}`);
-      } else if (normalizedModelName.includes(':')) {
-        // 强制设置格式正确的模型
+      } else if (normalizedModelName.includes(':') || normalizedModelName.includes('/')) {
+        const parsedModel = parseChatModelReference(normalizedModelName);
+        if (!parsedModel) {
+          await sender.sendText(chatId, `未找到模型 "${normalizedModelName}"`);
+          return;
+        }
+        if (!isChatModelAllowed(parsedModel.providerId, parsedModel.modelId)) {
+          await sender.sendText(chatId, `模型 "${normalizedModelName}" 不在当前允许列表中`);
+          return;
+        }
+
         chatSessionStore.updateConfigByConversation('qq', chatId, {
-          preferredModel: normalizedModelName,
+          preferredModel: `${parsedModel.providerId}:${parsedModel.modelId}`,
         });
-        await sender.sendText(chatId, `已设置模型: ${normalizedModelName}`);
+        await sender.sendText(chatId, `已设置模型: ${parsedModel.providerId}:${parsedModel.modelId}`);
       } else {
         await sender.sendText(chatId, `未找到模型 "${normalizedModelName}"`);
       }
@@ -733,71 +754,222 @@ export class QQHandler {
         return;
       }
 
-      const lines: string[] = ['📋 可用模型列表\n'];
+      const models = collectAllowedChatModels(providers);
+      const providerGroups = new Map<string, { providerName: string; models: Array<{ id: string; name: string }> }>();
+
+      for (const model of models) {
+        if (!providerGroups.has(model.providerId)) {
+          providerGroups.set(model.providerId, {
+            providerName: model.providerName,
+            models: [],
+          });
+        }
+        providerGroups.get(model.providerId)!.models.push({ id: model.modelId, name: model.modelName });
+      }
+
+      const introMarkdownLines: string[] = [
+        '# 可用模型列表',
+        '',
+        `使用 ${buildQQCmdInput('/model ', '/model <名称>')} 切换模型`,
+        '',
+      ];
+      const introTextLines: string[] = [
+        '可用模型列表',
+        '使用 /model <名称> 切换模型',
+        '',
+      ];
+      const sections: Array<{ markdown: string; text: string }> = [];
       let totalCount = 0;
 
-      for (const provider of providers) {
-        const providerId = (provider as Record<string, unknown>).id as string | undefined;
-        const providerName = (provider as Record<string, unknown>).name || providerId || 'Unknown';
-        const rawModels = (provider as Record<string, unknown>).models;
+      for (const [providerId, group] of providerGroups.entries()) {
+        if (group.models.length === 0) continue;
 
-        // models 可能是数组，也可能是对象（Map）
-        const models: Array<{ id: string; name?: string }> = [];
-        if (Array.isArray(rawModels)) {
-          for (const m of rawModels) {
-            if (m && typeof m === 'object') {
-              const mr = m as Record<string, unknown>;
-              models.push({
-                id: (mr.id as string) || '',
-                name: mr.name as string | undefined,
-              });
-            }
-          }
-        } else if (rawModels && typeof rawModels === 'object') {
-          // SDK 返回的是对象 Map<string, Model>
-          const modelMap = rawModels as Record<string, unknown>;
-          for (const [modelId, modelInfo] of Object.entries(modelMap)) {
-            if (modelInfo && typeof modelInfo === 'object') {
-              const mi = modelInfo as Record<string, unknown>;
-              models.push({
-                id: modelId,
-                name: (mi.name as string) || modelId,
-              });
-            }
-          }
-        }
+        const providerMarkdownLines: string[] = [`## ${group.providerName}`];
+        const providerTextLines: string[] = [`【${group.providerName}】`];
 
-        if (models.length === 0) continue;
-        lines.push(`【${providerName}】`);
-
-        for (const model of models.slice(0, 10)) {
+        for (const model of group.models.slice(0, 10)) {
           const modelDisplay = model.name || model.id;
-          lines.push(`  ${modelDisplay} (${providerId}:${model.id})`);
+          const modelKey = `${providerId}:${model.id}`;
+          providerMarkdownLines.push(`- ${buildQQCmdInput(modelKey, `${modelDisplay} (${modelKey})`)}`);
+          providerTextLines.push(`- ${modelDisplay} (${modelKey})`);
           totalCount++;
         }
 
-        if (models.length > 10) {
-          lines.push(`  ... 共 ${models.length} 个模型`);
+        if (group.models.length > 10) {
+          providerMarkdownLines.push(`- _... 共 ${group.models.length} 个模型_`);
+          providerTextLines.push(`- ... 共 ${group.models.length} 个模型`);
         }
-        lines.push('');
+
+        sections.push({
+          markdown: providerMarkdownLines.join('\n'),
+          text: providerTextLines.join('\n'),
+        });
       }
 
       if (totalCount === 0) {
-        lines.push('暂无可用模型');
-      } else {
-        lines.push(`共 ${totalCount} 个模型，使用 /model <名称> 切换`);
+        await sender.sendText(chatId, '暂无可用模型');
+        return;
       }
 
-      let result = lines.join('\n');
-      if (result.length > 3000) {
-        result = result.slice(0, 2900) + '\n\n... 列表过长，已截断';
-      }
+      sections.push({
+        markdown: `共 ${totalCount} 个模型，点击条目可自动填入模型 ID。`,
+        text: `共 ${totalCount} 个模型，使用 /model <名称> 切换`,
+      });
 
-      await sender.sendText(chatId, result);
+      await this.sendQQPagedCard(chatId, sender, introMarkdownLines, introTextLines, sections);
     } catch (error) {
       console.error('[QQ] 获取模型列表失败:', error);
       await sender.sendText(chatId, '获取模型列表失败');
     }
+  }
+
+  private async handleConfigCommand(
+    command: ParsedCommand,
+    chatId: string,
+    sender: PlatformSender
+  ): Promise<void> {
+    if (!command.configKey) {
+      await this.sendQQCard(chatId, sender, {
+        markdown: [
+          '# 当前聊天配置',
+          '',
+          '- `/config session order` 查看当前会话排序模式',
+          '- `/config session order default` 使用默认排序',
+          '- `/config session order last_time` 按最后修改时间倒序',
+          '- `/config output onlyText true|false` 切换 QQ Markdown / 纯文本输出',
+          '- `/config session help_with_qc true|false` 控制 /help 后是否推送 /qc',
+          '- `/config session session_with_ctl true|false` 控制 /sessions 后是否推送 /session_ctl',
+          '- `/config session session_with_change true|false` 控制 /sessions 是否展示会话切换按钮',
+        ].join('\n'),
+        qqText: [
+          '当前聊天配置',
+          '/config session order - 查看当前会话排序模式',
+          '/config session order default - 使用默认排序',
+          '/config session order last_time - 按最后修改时间倒序',
+          '/config output onlyText true|false - 切换 QQ Markdown / 纯文本输出',
+          '/config session help_with_qc true|false - 控制 /help 后是否推送 /qc',
+          '/config session session_with_ctl true|false - 控制 /sessions 后是否推送 /session_ctl',
+          '/config session session_with_change true|false - 控制 /sessions 是否展示会话切换按钮',
+        ].join('\n'),
+      });
+      return;
+    }
+
+    if (command.configScope === 'output' && command.configKey === 'only_text') {
+      const currentValue = this.isQQOnlyTextEnabled(chatId);
+
+      if (!command.configValue) {
+        await this.sendQQCard(chatId, sender, {
+          markdown: [
+            '# QQ 输出配置',
+            '',
+            `当前模式：**${currentValue ? '纯文本输出' : 'Markdown 输出'}**`,
+            '',
+            '- `true`：禁用 QQ Markdown，直接输出原始文本',
+            '- `false`：恢复 QQ Markdown 输出',
+            '',
+            '说明：当前版本电脑 QQ 的 Markdown 渲染可能不稳定，若出现内容被吞或显示异常，可切换到纯文本输出。',
+          ].join('\n'),
+          qqText: [
+            'QQ 输出配置',
+            `当前模式: ${currentValue ? '纯文本输出' : 'Markdown 输出'}`,
+            '- true: 禁用 QQ Markdown，直接输出原始文本',
+            '- false: 恢复 QQ Markdown 输出',
+            '说明: 当前版本电脑 QQ 的 Markdown 渲染可能不稳定，若出现内容被吞或显示异常，可切换到纯文本输出。',
+          ].join('\n'),
+        });
+        return;
+      }
+
+      if (command.configValue !== 'true' && command.configValue !== 'false') {
+        await sender.sendText(chatId, '配置 onlyText 仅支持 true 或 false。');
+        return;
+      }
+
+      const boolValue = command.configValue === 'true';
+      chatSessionStore.updateConfigByConversation('qq', chatId, {
+        qqOutputOnlyText: boolValue,
+      });
+      await sender.sendText(chatId, `QQ 输出模式已切换为：${boolValue ? '纯文本输出' : 'Markdown 输出'}`);
+      return;
+    }
+
+    if (command.configScope !== 'session') {
+      await sender.sendText(chatId, '当前仅支持 /config session 与 /config output onlyText 配置');
+      return;
+    }
+
+    if (command.configKey === 'order') {
+      if (!command.configValue) {
+        const mode = this.getSessionOrderMode(chatId);
+        await this.sendQQCard(chatId, sender, {
+          markdown: [
+            '# 会话排序配置',
+            '',
+            `当前模式：**${this.formatSessionOrderMode(mode)}**`,
+            '',
+            '可选值：',
+            '- `default` 默认排序',
+            '- `last_time` 按最后修改时间倒序',
+          ].join('\n'),
+          qqText: [
+            '会话排序配置',
+            `当前模式: ${this.formatSessionOrderMode(mode)}`,
+            '可选值:',
+            '- default 默认排序',
+            '- last_time 按最后修改时间倒序',
+          ].join('\n'),
+        });
+        return;
+      }
+
+      if (command.configValue !== 'default' && command.configValue !== 'last_time') {
+        await sender.sendText(chatId, '不支持的排序模式。请使用 /config session order default 或 /config session order last_time。');
+        return;
+      }
+
+      chatSessionStore.updateConfigByConversation('qq', chatId, {
+        sessionOrderMode: command.configValue,
+      });
+      await sender.sendText(chatId, `当前模式已切换为：${this.formatSessionOrderMode(command.configValue)}`);
+      return;
+    }
+
+    if (
+      command.configKey === 'help_with_qc'
+      || command.configKey === 'session_with_ctl'
+      || command.configKey === 'session_with_change'
+    ) {
+      const currentValue = command.configKey === 'help_with_qc'
+        ? chatSessionStore.getSessionByConversation('qq', chatId)?.helpWithQc === true
+        : command.configKey === 'session_with_ctl'
+          ? chatSessionStore.getSessionByConversation('qq', chatId)?.sessionWithCtl === true
+          : chatSessionStore.getSessionByConversation('qq', chatId)?.sessionWithChange === true;
+
+      if (!command.configValue) {
+        await sender.sendText(chatId, `${command.configKey} 当前值: ${currentValue ? 'true' : 'false'}`);
+        return;
+      }
+
+      if (command.configValue !== 'true' && command.configValue !== 'false') {
+        await sender.sendText(chatId, `配置 ${command.configKey} 仅支持 true 或 false`);
+        return;
+      }
+
+      const boolValue = command.configValue === 'true';
+      if (command.configKey === 'help_with_qc') {
+        chatSessionStore.updateConfigByConversation('qq', chatId, { helpWithQc: boolValue });
+      } else if (command.configKey === 'session_with_ctl') {
+        chatSessionStore.updateConfigByConversation('qq', chatId, { sessionWithCtl: boolValue });
+      } else {
+        chatSessionStore.updateConfigByConversation('qq', chatId, { sessionWithChange: boolValue });
+      }
+
+      await sender.sendText(chatId, `已将 ${command.configKey} 设置为 ${String(boolValue)}`);
+      return;
+    }
+
+    await sender.sendText(chatId, '当前仅支持 /config session 下的会话排序与展示配置，以及 /config output onlyText');
   }
 
   /**
@@ -1052,10 +1224,69 @@ export class QQHandler {
       const sessionData = chatSessionStore.getSessionByConversation('qq', chatId);
       const directory = sessionData?.resolvedDirectory;
 
-      const variant = promptEffort || config?.preferredEffort;
+      let variant = promptEffort || config?.preferredEffort;
+
+      // 验证 variant 是否与当前模型兼容
+      if (variant && providerId && modelId) {
+        try {
+          const providersPayload = await opencodeClient.getProviders();
+          const providers = Array.isArray(providersPayload.providers) ? providersPayload.providers : [];
+          const providerLower = providerId.toLowerCase();
+          const modelLower = modelId.toLowerCase();
+
+          for (const provider of providers) {
+            if (!provider || typeof provider !== 'object') continue;
+            const providerRecord = provider as Record<string, unknown>;
+            const providerIdRaw = typeof providerRecord.id === 'string' ? providerRecord.id.trim() : '';
+            if (!providerIdRaw || providerIdRaw.toLowerCase() !== providerLower) continue;
+
+            const modelsRaw = providerRecord.models;
+            const modelList = Array.isArray(modelsRaw)
+              ? modelsRaw
+              : (modelsRaw && typeof modelsRaw === 'object' ? Object.values(modelsRaw) : []);
+
+            for (const modelItem of modelList) {
+              if (!modelItem || typeof modelItem !== 'object') continue;
+              const modelRecord = modelItem as Record<string, unknown>;
+              const modelIdRaw = typeof modelRecord.id === 'string'
+                ? modelRecord.id.trim()
+                : (typeof modelRecord.modelID === 'string' ? modelRecord.modelID.trim() : '');
+              if (!modelIdRaw || modelIdRaw.toLowerCase() !== modelLower) continue;
+
+              // 解析模型支持的 variants
+              const variants = modelRecord.variants;
+              if (variants && typeof variants === 'object' && !Array.isArray(variants)) {
+                const supportedVariants: EffortLevel[] = [];
+                for (const key of Object.keys(variants as Record<string, unknown>)) {
+                  const normalized = normalizeEffortLevel(key);
+                  if (normalized && normalized !== 'none' && !supportedVariants.includes(normalized)) {
+                    supportedVariants.push(normalized);
+                  }
+                }
+                // 如果当前 variant 不在支持列表中，清除它
+                if (supportedVariants.length > 0 && !supportedVariants.includes(variant)) {
+                  variant = undefined;
+                }
+              }
+              break;
+            }
+            break;
+          }
+        } catch (error) {
+          console.debug('[QQ] 获取模型支持的 variants 失败，跳过验证:', error instanceof Error ? error.message : String(error));
+        }
+      }
+
+      // ── 非多模态主模型图片回退 ──
+      const dispatchParts = await preprocessVisionParts(
+        parts as VisionPart[],
+        { providerId, modelId, directory },
+        'QQ',
+      ) as OpencodePartInput[];
+
       await opencodeClient.sendMessagePartsAsync(
         sessionId,
-        parts,
+        dispatchParts,
         {
           providerId,
           modelId,
@@ -1121,7 +1352,7 @@ export class QQHandler {
         });
 
         const buffer = Buffer.from(response.data);
-        const contentType = response.headers['content-type'] || '';
+        const contentType = (response.headers['content-type'] as string) || '';
 
         // 确定文件扩展名
         const extFromName = attachment.fileName ? extractExtension(attachment.fileName) : '';

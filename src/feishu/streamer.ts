@@ -1,5 +1,5 @@
-import { feishuClient } from './client.js';
 import { buildStreamCard } from './cards-stream.js';
+import { feishuClient } from './client.js';
 
 export interface StreamState {
   text: string;
@@ -15,6 +15,8 @@ export interface StreamState {
 export class CardStreamer {
   private chatId: string;
   private messageId: string | null = null;
+  private finalMessageId: string | null = null;
+  private deletedStreamingMessageId: string | null = null;
   private state: StreamState = {
     text: '',
     thinking: '',
@@ -24,6 +26,7 @@ export class CardStreamer {
   private lastUpdate: number = 0;
   private throttleMs: number = 500;
   private pendingUpdate: NodeJS.Timeout | null = null;
+  private finalDeliveryPromise: Promise<void> | null = null;
 
   constructor(chatId: string) {
     this.chatId = chatId;
@@ -90,6 +93,30 @@ export class CardStreamer {
     this.lastUpdate = Date.now();
     const card = this.buildCard();
     await feishuClient.updateCard(this.messageId, card);
+
+    if (this.state.status !== 'processing' && !this.finalMessageId && !this.finalDeliveryPromise) {
+      this.finalDeliveryPromise = (async () => {
+        const streamingMessageId = this.messageId;
+        try {
+          // 重新构建卡片，确保使用最新的状态（避免因并发 doUpdate 导致使用过期状态）
+          const finalCard = this.buildCard();
+          const finalMessageId = await feishuClient.sendCard(this.chatId, finalCard);
+          if (finalMessageId) {
+            this.finalMessageId = finalMessageId;
+            if (streamingMessageId && this.deletedStreamingMessageId !== streamingMessageId) {
+              const deleted = await feishuClient.deleteMessage(streamingMessageId);
+              if (deleted) {
+                this.deletedStreamingMessageId = streamingMessageId;
+              }
+            }
+          }
+        } finally {
+          this.finalDeliveryPromise = null;
+        }
+      })();
+
+      await this.finalDeliveryPromise;
+    }
   }
 
   private buildCard(): object {

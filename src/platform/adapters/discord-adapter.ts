@@ -21,72 +21,19 @@ import { discordConfig } from '../../config.js';
 import { opencodeClient } from '../../opencode/client.js';
 import { chatSessionStore } from '../../store/chat-session.js';
 import { reliabilityConfig } from '../../config.js';
-import { getRuntimeCronManager } from '../../reliability/runtime-cron-registry.js';
-import { cleanupRuntimeCronJobsByConversation } from '../../reliability/runtime-cron-orphan.js';
+import { getRuntimeCronManager, cleanupRuntimeCronJobsByConversation } from '../../reliability/runtime-cron.js';
 
-// 动态导入缓存：仅在启用时加载 discord.js
-let _discordModule: typeof import('discord.js') | null = null;
-async function getDiscordModule(): Promise<typeof import('discord.js')> {
-  if (!_discordModule) {
-    _discordModule = await import('discord.js');
-  }
-  return _discordModule;
-}
+import {
+  DISCORD_MESSAGE_LIMIT,
+  type DiscordSelectOptionPayload,
+  type DiscordSelectComponentPayload,
+  type DiscordCardPayload,
+  type DiscordMessagePayload,
+  type DiscordSendableChannel,
+} from './discord-adapter-types.js';
 
-const DISCORD_MESSAGE_LIMIT = 1800;
+import { getDiscordModule, escapeRegExp, isDiscordSendableChannel } from './discord-adapter-utils.js';
 
-type DiscordSelectOptionPayload = {
-  label: string;
-  value: string;
-  description?: string;
-  emoji?: string;
-};
-
-type DiscordSelectComponentPayload = {
-  type?: 'select';
-  customId: string;
-  placeholder?: string;
-  options: DiscordSelectOptionPayload[];
-  minValues?: number;
-  maxValues?: number;
-  disabled?: boolean;
-};
-
-type DiscordCardPayload = {
-  discordText?: string;
-  discordComponents?: DiscordSelectComponentPayload[];
-};
-
-type DiscordMessagePayload = {
-  content: string;
-  components?: ActionRowBuilder<StringSelectMenuBuilder>[];
-};
-
-type DiscordSendableChannel = {
-  send: (content: string | DiscordMessagePayload) => Promise<Message>;
-  messages: {
-    fetch: (messageId: string) => Promise<Message>;
-  };
-};
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-function isDiscordSendableChannel(channel: unknown): channel is DiscordSendableChannel {
-  if (!channel || typeof channel !== 'object') {
-    return false;
-  }
-
-  const record = channel as {
-    send?: unknown;
-    messages?: { fetch?: unknown };
-  };
-
-  return typeof record.send === 'function'
-    && !!record.messages
-    && typeof record.messages.fetch === 'function';
-}
 
 class DiscordSender implements PlatformSender {
   constructor(private readonly adapter: DiscordAdapter) {}
@@ -445,13 +392,16 @@ export class DiscordAdapter implements PlatformAdapter {
   }
 
   stop(): void {
-    if (!this.client) {
-      return;
+    if (this.client) {
+      this.client.destroy();
+      this.client = null;
     }
-    this.client.destroy();
-    this.client = null;
     this.isActive = false;
     this.messageConversationMap.clear();
+    this.messageCallbacks.length = 0;
+    this.interactionCallbacks.length = 0;
+    this.actionCallbacks.length = 0;
+    this.messageRecalledCallbacks.length = 0;
     console.log('[Discord] 适配器已停止');
   }
 

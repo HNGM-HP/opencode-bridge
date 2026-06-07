@@ -7,7 +7,7 @@
  */
 
 import WebSocket from 'ws';
-import axios from 'axios';
+import axios, { AxiosError } from 'axios';
 import type {
   PlatformAdapter,
   PlatformMessageEvent,
@@ -18,157 +18,25 @@ import type {
 import { qqConfig } from '../../config.js';
 import { chatSessionStore } from '../../store/chat-session.js';
 
-const QQ_MESSAGE_LIMIT = 3000;
-const QQ_API_BASE = 'https://api.sgroup.qq.com';
-const QQ_OAUTH_BASE = 'https://bots.qq.com/app/getAppAccessToken';
-const QQ_GATEWAY_URL = 'https://api.sgroup.qq.com/gateway/bot';
+import {
+  QQ_MESSAGE_LIMIT,
+  QQ_API_BASE,
+  QQ_OAUTH_BASE,
+  QQ_GATEWAY_URL,
+  OpCode,
+  Intents,
+  FULL_INTENTS,
+  type QQProtocol,
+  type OneBotEvent,
+  type OneBotMessageSegment,
+  type OneBotAttachmentData,
+  type QQCardPayload,
+  type QQWSMessage,
+  type QQGatewayResponse,
+  type QQDispatchData,
+} from './qq-adapter-types.js';
 
-// WebSocket OpCode
-const OpCode = {
-  DISPATCH: 0,
-  HEARTBEAT: 1,
-  IDENTIFY: 2,
-  RESUME: 6,
-  RECONNECT: 7,
-  HELLO: 10,
-  HEARTBEAT_ACK: 11,
-} as const;
-
-// Intent 位掩码
-const Intents = {
-  GUILDS: 1 << 0,
-  GUILD_MEMBERS: 1 << 1,
-  DIRECT_MESSAGE: 1 << 12,
-  GROUP_AND_C2C: 1 << 25,
-  AUDIO_ACTION: 1 << 29,
-  AT_MESSAGES: 1 << 30,
-};
-
-// 完整权限（群聊 + 私信 + 频道）
-const FULL_INTENTS = Intents.AT_MESSAGES | Intents.DIRECT_MESSAGE | Intents.GROUP_AND_C2C;
-
-// ──────────────────────────────────────────────
-// 类型定义
-// ──────────────────────────────────────────────
-
-type QQProtocol = 'official' | 'onebot';
-
-type OneBotEvent = {
-  post_type: string;
-  message_type?: string;
-  message_id?: number;
-  user_id?: number;
-  group_id?: number;
-  message?: string | OneBotMessageSegment[];
-  raw_message?: string;
-  self_id?: number;
-};
-
-type OneBotMessageSegment = {
-  type: string;
-  data: Record<string, unknown>;
-};
-
-// OneBot 附件类型映射
-type OneBotAttachmentData = {
-  file?: string;       // 文件名或 URL
-  url?: string;        // 文件 URL
-  filename?: string;   // 文件名
-  size?: number;       // 文件大小
-  file_size?: number;  // 文件大小（备用字段）
-};
-
-type QQCardPayload = {
-  qqText?: string;
-  content?: string;
-  text?: string;
-  markdown?: string;
-};
-
-// ──────────────────────────────────────────────
-// 工具函数
-// ──────────────────────────────────────────────
-
-function removeMarkdownFormatting(text: string): string {
-  if (!text) return '';
-  return text
-    .replace(/\*\*(.*?)\*\*/g, '$1')
-    .replace(/(?<!\*)\*(?!\*)(.*?)(?<!\*)\*(?!\*)/g, '$1')
-    .replace(/_(.*?)_/g, '$1')
-    .replace(/`([^`]*)`/g, '$1')
-    .replace(/^#{1,6}\s+/gm, '')
-    .replace(/\[([^\]]+)\]\([^\)]+\)/g, '$1')
-    .replace(/!\[([^\]]*)\]\([^\)]+\)/g, '$1')
-    .replace(/^---+$/gm, '')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
-}
-
-function splitText(text: string, limit: number): string[] {
-  if (!text.trim()) return [];
-  if (text.length <= limit) return [text];
-
-  const chunks: string[] = [];
-  let remaining = text;
-  while (remaining.length > limit) {
-    const candidate = remaining.slice(0, limit);
-    const breakAt = Math.max(
-      candidate.lastIndexOf('\n'),
-      candidate.lastIndexOf('。'),
-      candidate.lastIndexOf('，'),
-      candidate.lastIndexOf(' ')
-    );
-    const cut = breakAt > Math.floor(limit * 0.5) ? breakAt : limit;
-    chunks.push(remaining.slice(0, cut));
-    remaining = remaining.slice(cut).trimStart();
-  }
-  if (remaining.length > 0) {
-    chunks.push(remaining);
-  }
-  return chunks;
-}
-
-// ──────────────────────────────────────────────
-// QQ 官方 API 客户端 (WebSocket 方式)
-// ──────────────────────────────────────────────
-
-type QQWSMessage = {
-  op: number;
-  s?: number;
-  t?: string;
-  d?: unknown;
-};
-
-type QQGatewayResponse = {
-  url: string;
-  shards?: number;
-  session_start_limit?: {
-    total: number;
-    remaining: number;
-    reset_after: number;
-  };
-};
-
-type QQDispatchData = {
-  id?: string;
-  session_id?: string;
-  content?: string;
-  timestamp?: string;
-  author?: {
-    id?: string;
-    user_openid?: string;
-    member_openid?: string;
-  };
-  group_id?: string;
-  channel_id?: string;
-  guild_id?: string;
-  attachments?: Array<{
-    content_type?: string;
-    filename?: string;
-    url?: string;
-    size?: number;
-  }>;
-};
+import { splitText, splitMarkdownText } from './qq-adapter-utils.js';
 
 class QQOfficialClient {
   private ws: WebSocket | null = null;
@@ -186,6 +54,49 @@ class QQOfficialClient {
     private readonly appId: string,
     private readonly secret: string,
   ) {}
+
+  private resetAccessToken(): void {
+    this.accessToken = null;
+    this.accessTokenExpiresAt = 0;
+    this.accessTokenPromise = null;
+  }
+
+  private isAccessTokenExpiredError(error: unknown): boolean {
+    if (!(error instanceof AxiosError)) {
+      return false;
+    }
+
+    const responseData = error.response?.data as {
+      code?: number | string;
+      err_code?: number | string;
+      message?: string;
+    } | undefined;
+
+    const errorCode = responseData?.err_code ?? responseData?.code;
+    const normalizedCode = typeof errorCode === 'string' ? Number(errorCode) : errorCode;
+    if (normalizedCode === 11244) {
+      return true;
+    }
+
+    const message = responseData?.message?.toLowerCase();
+    return typeof message === 'string' && message.includes('token not exist or expire');
+  }
+
+  private async postMessage(
+    endpoint: string,
+    requestData: Record<string, unknown>,
+    accessToken: string,
+  ): Promise<string | null> {
+    const response = await axios.post(endpoint, requestData, {
+      headers: {
+        'Authorization': `QQBot ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      timeout: 30000,
+    });
+
+    return response.data?.id || response.data?.msg_id || null;
+  }
 
   private async fetchAccessToken(): Promise<string> {
     console.log('[QQ Official] 获取 Access Token...');
@@ -501,9 +412,11 @@ class QQOfficialClient {
   }
 
   async sendMessage(chatId: string, text: string, msgId?: string): Promise<string | null> {
+    return this.sendMarkdownMessage(chatId, text, msgId);
+  }
+
+  async sendPlainTextMessage(chatId: string, text: string, msgId?: string): Promise<string | null> {
     try {
-      const content = removeMarkdownFormatting(text);
-      const accessToken = await this.getValidAccessToken();
       const isGroup = chatId.startsWith('group_');
       const targetId = chatId.replace(/^(group_|c2c_)/, '');
 
@@ -512,7 +425,7 @@ class QQOfficialClient {
         : `${QQ_API_BASE}/v2/users/${targetId}/messages`;
 
       const requestData: Record<string, unknown> = {
-        content,
+        content: text,
         msg_type: 0,
       };
 
@@ -520,17 +433,60 @@ class QQOfficialClient {
         requestData.msg_id = msgId;
       }
 
-      const response = await axios.post(endpoint, requestData, {
-        headers: {
-          'Authorization': `QQBot ${accessToken}`,
-          'Content-Type': 'application/json',
-        },
-        timeout: 30000,
-      });
+      try {
+        const accessToken = await this.getValidAccessToken();
+        return await this.postMessage(endpoint, requestData, accessToken);
+      } catch (error) {
+        if (!this.isAccessTokenExpiredError(error)) {
+          throw error;
+        }
 
-      return response.data?.id || response.data?.msg_id || null;
+        console.warn('[QQ Official] 发送纯文本消息时 Access Token 已失效，刷新后重试一次');
+        this.resetAccessToken();
+        const refreshedAccessToken = await this.getValidAccessToken();
+        return await this.postMessage(endpoint, requestData, refreshedAccessToken);
+      }
     } catch (error) {
-      console.error('[QQ Official] 发送消息失败:', error);
+      console.error('[QQ Official] 发送纯文本消息失败:', error);
+      return null;
+    }
+  }
+
+  async sendMarkdownMessage(chatId: string, markdown: string, msgId?: string): Promise<string | null> {
+    try {
+      const isGroup = chatId.startsWith('group_');
+      const targetId = chatId.replace(/^(group_|c2c_)/, '');
+
+      const endpoint = isGroup
+        ? `${QQ_API_BASE}/v2/groups/${targetId}/messages`
+        : `${QQ_API_BASE}/v2/users/${targetId}/messages`;
+
+      const requestData: Record<string, unknown> = {
+        markdown: {
+          content: markdown,
+        },
+        msg_type: 2,
+      };
+
+      if (isGroup && msgId) {
+        requestData.msg_id = msgId;
+      }
+
+      try {
+        const accessToken = await this.getValidAccessToken();
+        return await this.postMessage(endpoint, requestData, accessToken);
+      } catch (error) {
+        if (!this.isAccessTokenExpiredError(error)) {
+          throw error;
+        }
+
+        console.warn('[QQ Official] 发送 Markdown 消息时 Access Token 已失效，刷新后重试一次');
+        this.resetAccessToken();
+        const refreshedAccessToken = await this.getValidAccessToken();
+        return await this.postMessage(endpoint, requestData, refreshedAccessToken);
+      }
+    } catch (error) {
+      console.error('[QQ Official] 发送 Markdown 消息失败:', error);
       return null;
     }
   }
@@ -862,12 +818,16 @@ class QQSender implements PlatformSender {
   ) {}
 
   async sendText(conversationId: string, text: string): Promise<string | null> {
-    const chunks = splitText(text, QQ_MESSAGE_LIMIT);
+    const chunks = this.protocol === 'official'
+      ? splitMarkdownText(text, QQ_MESSAGE_LIMIT)
+      : splitText(text, QQ_MESSAGE_LIMIT);
     if (chunks.length === 0) return null;
 
     let firstMessageId: string | null = null;
     for (const chunk of chunks) {
-      const messageId = await this.adapter.sendRawMessage(conversationId, chunk);
+      const messageId = this.protocol === 'official'
+        ? await this.adapter.sendRawMarkdownMessage(conversationId, chunk)
+        : await this.adapter.sendRawMessage(conversationId, chunk);
       if (messageId && !firstMessageId) {
         firstMessageId = messageId;
       }
@@ -880,6 +840,32 @@ class QQSender implements PlatformSender {
 
   async sendCard(conversationId: string, card: object): Promise<string | null> {
     const payload = card as QQCardPayload;
+    if (this.protocol === 'official' && payload.forcePlainText) {
+      const content = payload.qqText || payload.text || payload.content || payload.markdown || JSON.stringify(card);
+      const chunks = splitText(content, QQ_MESSAGE_LIMIT);
+      if (chunks.length === 0) return null;
+
+      let firstMessageId: string | null = null;
+      for (const chunk of chunks) {
+        const messageId = await this.adapter.sendRawPlainTextMessage(conversationId, chunk);
+        if (messageId && !firstMessageId) {
+          firstMessageId = messageId;
+        }
+        if (messageId) {
+          this.adapter.rememberMessageConversation(messageId, conversationId);
+        }
+      }
+      return firstMessageId;
+    }
+
+    if (this.protocol === 'official' && payload.markdown) {
+      const messageId = await this.adapter.sendRawMarkdownMessage(conversationId, payload.markdown);
+      if (messageId) {
+        this.adapter.rememberMessageConversation(messageId, conversationId);
+      }
+      return messageId;
+    }
+
     const content = payload.qqText || payload.text || payload.markdown || payload.content || JSON.stringify(card);
     return this.sendText(conversationId, content);
   }
@@ -1017,6 +1003,8 @@ export class QQAdapter implements PlatformAdapter {
     }
     this.isActive = false;
     this.messageConversationMap.clear();
+    this.messageCallbacks.length = 0;
+    this.actionCallbacks.length = 0;
     console.log('[QQ] 适配器已停止');
   }
 
@@ -1053,7 +1041,7 @@ export class QQAdapter implements PlatformAdapter {
 
   async sendRawMessage(conversationId: string, text: string): Promise<string | null> {
     if (qqConfig.protocol === 'official' && this.officialClient) {
-      return this.officialClient.sendMessage(conversationId, text);
+      return this.officialClient.sendMarkdownMessage(conversationId, text);
     }
 
     if (qqConfig.protocol === 'onebot' && this.onebotClient) {
@@ -1075,6 +1063,22 @@ export class QQAdapter implements PlatformAdapter {
     }
 
     return null;
+  }
+
+  async sendRawMarkdownMessage(conversationId: string, markdown: string): Promise<string | null> {
+    if (qqConfig.protocol === 'official' && this.officialClient) {
+      return this.officialClient.sendMarkdownMessage(conversationId, markdown);
+    }
+
+    return this.sendRawMessage(conversationId, markdown);
+  }
+
+  async sendRawPlainTextMessage(conversationId: string, text: string): Promise<string | null> {
+    if (qqConfig.protocol === 'official' && this.officialClient) {
+      return this.officialClient.sendPlainTextMessage(conversationId, text);
+    }
+
+    return this.sendRawMessage(conversationId, text);
   }
 
   async deleteMessage(messageId: string): Promise<boolean> {

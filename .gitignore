@@ -15,12 +15,19 @@ release/
 data/config.db
 data/
 
+# 临时文档和计划文件
+plan*.md
+PLAN*.md
+PLAN.md
+.codex
+
 # 前端依赖
 web/node_modules/
 
 # 日志文件
 logs/
 *.log
+.codex-logs/
 
 # 会话数据（用户隐私）
 .session-*.json
@@ -60,6 +67,10 @@ memory/
 HEARTBEAT.md
 PLAN.md
 PLAN_*.md
+plan*
+
+# Codex 本地工作文件
+.codex
 
 # 本地开发包和临时组件
 package/

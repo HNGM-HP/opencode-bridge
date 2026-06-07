@@ -22,30 +22,6 @@ import { whatsappConfig } from '../../config.js';
 import path from 'node:path';
 import fs from 'node:fs';
 
-// 动态导入缓存：仅在启用时加载 baileys
-type BaileysModule = typeof import('@whiskeysockets/baileys');
-let _baileysModule: BaileysModule | null = null;
-async function getBaileysModule(): Promise<BaileysModule> {
-  if (!_baileysModule) {
-    _baileysModule = await import('@whiskeysockets/baileys');
-  }
-  return _baileysModule;
-}
-
-// 动态导入缓存：QRCode 库
-type QRCodeModule = typeof import('qrcode');
-let _qrcodeModule: QRCodeModule | null = null;
-async function getQRCodeModule(): Promise<QRCodeModule> {
-  if (!_qrcodeModule) {
-    _qrcodeModule = await import('qrcode');
-  }
-  return _qrcodeModule;
-}
-
-const WHATSAPP_MESSAGE_LIMIT = 4096;
-
-// 状态文件路径（用于跨进程通信）
-const STATUS_FILE_PATH = path.join(process.cwd(), 'data', 'whatsapp-status.json');
 
 /**
  * WhatsApp Personal 模式发送器实现 (baileys)
@@ -359,48 +335,21 @@ class WhatsAppBusinessSender implements PlatformSender {
 /**
  * WhatsApp 连接状态
  */
-export type WhatsAppConnectionStatus = 'connected' | 'need_scan' | 'disconnected' | 'connecting';
+import {
+  BaileysModule,
+  QRCodeModule,
+  WHATSAPP_MESSAGE_LIMIT,
+  STATUS_FILE_PATH,
+  type WhatsAppConnectionStatus,
+  type WhatsAppStatusInfo,
+} from './whatsapp-adapter-types.js';
 
-/**
- * WhatsApp 连接状态响应
- */
-export interface WhatsAppStatusInfo {
-  enabled: boolean;
-  mode: 'personal' | 'business';
-  status: WhatsAppConnectionStatus;
-  qrCode?: string; // base64 Data URL
-}
-
-/**
- * 写入状态文件（用于跨进程通信）
- */
-function writeStatusFile(status: WhatsAppStatusInfo): void {
-  try {
-    const dir = path.dirname(STATUS_FILE_PATH);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-    fs.writeFileSync(STATUS_FILE_PATH, JSON.stringify(status, null, 2), 'utf-8');
-  } catch (err) {
-    console.error('[WhatsApp] 写入状态文件失败:', err);
-  }
-}
-
-/**
- * 读取状态文件（用于 Admin Server 获取状态）
- */
-export function readStatusFile(): WhatsAppStatusInfo | null {
-  try {
-    if (!fs.existsSync(STATUS_FILE_PATH)) {
-      return null;
-    }
-    const content = fs.readFileSync(STATUS_FILE_PATH, 'utf-8');
-    return JSON.parse(content) as WhatsAppStatusInfo;
-  } catch (err) {
-    console.error('[WhatsApp] 读取状态文件失败:', err);
-    return null;
-  }
-}
+import {
+  getBaileysModule,
+  getQRCodeModule,
+  writeStatusFile,
+  readStatusFile,
+} from './whatsapp-adapter-utils.js';
 
 /**
  * WhatsApp 平台适配器实现
@@ -660,6 +609,8 @@ export class WhatsAppAdapter implements PlatformAdapter {
     this.qrCodeDataUrl = null;
     this.connectionStatus = 'disconnected';
     this.messageConversationMap.clear();
+    this.messageCallbacks.length = 0;
+    this.actionCallbacks.length = 0;
     console.log('[WhatsApp] 适配器已停止');
   }
 
@@ -1018,3 +969,6 @@ export class WhatsAppAdapter implements PlatformAdapter {
 
 // 单例导出
 export const whatsappAdapter = new WhatsAppAdapter();
+
+// ── 重导出（向后兼容） ────────────────────────
+export { readStatusFile, writeStatusFile } from './whatsapp-adapter-utils.js';

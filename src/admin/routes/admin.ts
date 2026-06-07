@@ -12,6 +12,9 @@ import { fileURLToPath } from 'node:url';
 import { configStore } from '../../store/config-store.js';
 import { logStore } from '../../store/log-store.js';
 import type { BridgeManager } from '../bridge-manager.js';
+import { getAutoStart, setAutoStart } from '../autostart.js';
+import { probeTcpPort } from '../utils.js';
+import { opencodeConfig } from '../../config.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -34,61 +37,7 @@ export function createAdminRoutes(options: AdminRoutesOptions): express.Router {
       startedAt: startedAt.toISOString(),
       dbPath: configStore.getDbPath(),
       cronJobCount,
-      needsPasswordChange: configStore.needsPasswordChange(),
     });
-  });
-
-  // ── GET /api/admin/password-status
-  router.get('/password-status', (_req, res) => {
-    res.json({
-      needsPasswordChange: configStore.needsPasswordChange(),
-      hasPassword: !!configStore.getAdminPassword(),
-    });
-  });
-
-  // ── POST /api/admin/reset-password（重置密码，用于密码恢复）
-  router.post('/reset-password', (_req, res) => {
-    // 清除密码和密码修改时间
-    configStore.setAdminPassword('');
-    configStore.setPasswordChangedAt('');
-
-    res.json({
-      ok: true,
-      message: '密码已重置，请重新设置密码',
-    });
-  });
-
-  // ── PUT /api/admin/password（修改密码或首次设置密码）
-  router.put('/password', (req, res) => {
-    const { oldPassword, newPassword } = req.body;
-
-    if (!newPassword || newPassword.length < 8) {
-      res.status(400).json({ error: '新密码长度至少 8 位' });
-      return;
-    }
-
-    const currentPassword = configStore.getAdminPassword();
-    const isFirstSetup = !currentPassword || currentPassword === '';
-
-    // 首次设置密码：无需验证旧密码
-    if (isFirstSetup) {
-      configStore.setAdminPassword(newPassword);
-      configStore.setPasswordChangedAt(new Date().toISOString());
-      res.json({ ok: true, message: '密码设置成功', isFirstSetup: true });
-      return;
-    }
-
-    // 修改密码：需要验证旧密码
-    if (oldPassword !== currentPassword) {
-      res.status(401).json({ error: '原密码错误' });
-      return;
-    }
-
-    // 更新密码
-    configStore.setAdminPassword(newPassword);
-    configStore.setPasswordChangedAt(new Date().toISOString());
-
-    res.json({ ok: true, message: '密码修改成功，请使用新密码重新登录' });
   });
 
   // ── POST /api/admin/restart
@@ -257,23 +206,16 @@ export function createAdminRoutes(options: AdminRoutesOptions): express.Router {
     res.json({ ok: true, results });
   });
 
-  // ── GET /api/admin/login-timeout（获取登录超时配置）
-  router.get('/login-timeout', (_req, res) => {
-    const timeoutMinutes = configStore.getLoginTimeout();
-    res.json({ timeoutMinutes });
+  // ── GET /api/admin/onboarding-status
+  router.get('/onboarding-status', (_req, res) => {
+    res.json({ completed: configStore.isOnboardingCompleted() });
   });
 
-  // ── PUT /api/admin/login-timeout（设置登录超时配置）
-  router.put('/login-timeout', (req, res) => {
-    const { timeoutMinutes } = req.body;
-
-    if (typeof timeoutMinutes !== 'number' || timeoutMinutes < 0) {
-      res.status(400).json({ error: '超时时间必须为非负整数' });
-      return;
-    }
-
-    configStore.setLoginTimeout(timeoutMinutes);
-    res.json({ ok: true, timeoutMinutes, message: '登录超时设置已保存' });
+  // ── PUT /api/admin/onboarding-status
+  router.put('/onboarding-status', (req, res) => {
+    const completed = Boolean(req.body?.completed);
+    configStore.setOnboardingCompleted(completed);
+    res.json({ ok: true, completed });
   });
 
   // ── GET /api/admin/check-update
@@ -321,6 +263,190 @@ export function createAdminRoutes(options: AdminRoutesOptions): express.Router {
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : 'Unknown error';
       res.status(500).json({ error: message });
+    }
+  });
+
+  // ── GET /api/admin/health（健康检测）
+  router.get('/health', async (_req, res) => {
+    const health: {
+      status: string;
+      timestamp: string;
+      checks: Record<string, { status: string; message: string }>;
+    } = {
+      status: 'healthy',
+      timestamp: new Date().toISOString(),
+      checks: {
+        database: { status: 'unknown', message: '' },
+        opencode: { status: 'unknown', message: '' },
+        feishu: { status: 'unknown', message: '' },
+        discord: { status: 'unknown', message: '' },
+        wecom: { status: 'unknown', message: '' },
+        telegram: { status: 'unknown', message: '' },
+        qq: { status: 'unknown', message: '' },
+        whatsapp: { status: 'unknown', message: '' },
+        weixin: { status: 'unknown', message: '' },
+        dingtalk: { status: 'unknown', message: '' },
+      },
+    };
+
+    // 检测数据库
+    try {
+      const dbPath = configStore.getDbPath();
+      if (dbPath) {
+        const fs = await import('node:fs');
+        if (fs.existsSync(dbPath)) {
+          health.checks.database = { status: 'ok', message: `数据库正常: ${dbPath}` };
+        } else {
+          health.checks.database = { status: 'warning', message: '数据库文件不存在，将自动创建' };
+        }
+      }
+    } catch (e: unknown) {
+      health.checks.database = { status: 'error', message: e instanceof Error ? e.message : 'Unknown error' };
+      health.status = 'degraded';
+    }
+
+    // 检测 OpenCode 连接
+    try {
+      const probeResult = await probeTcpPort(opencodeConfig.host, opencodeConfig.port, 2000);
+      const endpointLabel = `${opencodeConfig.host}:${opencodeConfig.port}`;
+      if (probeResult.isOpen) {
+        health.checks.opencode = { status: 'ok', message: `OpenCode 服务正常 (${endpointLabel})` };
+      } else {
+        health.checks.opencode = { status: 'error', message: `OpenCode 服务未响应 (${endpointLabel})` };
+        health.status = 'degraded';
+      }
+    } catch (e: unknown) {
+      health.checks.opencode = { status: 'error', message: e instanceof Error ? e.message : 'Unknown error' };
+      health.status = 'degraded';
+    }
+
+    // 检测各平台配置
+    const platformChecks: Array<{ key: string; enabledKey: string; check: (settings: Record<string, string>) => { status: string; message: string } }> = [
+      {
+        key: 'feishu',
+        enabledKey: 'FEISHU_ENABLED',
+        check: (s) => s.FEISHU_ENABLED === 'true' && s.FEISHU_APP_ID && s.FEISHU_APP_SECRET
+          ? { status: 'ok', message: '飞书凭据已配置' }
+          : s.FEISHU_ENABLED === 'true'
+            ? { status: 'warning', message: '飞书已启用但凭据未配置' }
+            : { status: 'ok', message: '飞书未启用' },
+      },
+      {
+        key: 'discord',
+        enabledKey: 'DISCORD_ENABLED',
+        check: (s) => s.DISCORD_ENABLED === 'true' && s.DISCORD_TOKEN
+          ? { status: 'ok', message: 'Discord 凭据已配置' }
+          : s.DISCORD_ENABLED === 'true'
+            ? { status: 'warning', message: 'Discord 已启用但凭据未配置' }
+            : { status: 'ok', message: 'Discord 未启用' },
+      },
+      {
+        key: 'wecom',
+        enabledKey: 'WECOM_ENABLED',
+        check: (s) => s.WECOM_ENABLED === 'true' && s.WECOM_BOT_ID && s.WECOM_SECRET
+          ? { status: 'ok', message: '企业微信凭据已配置' }
+          : s.WECOM_ENABLED === 'true'
+            ? { status: 'warning', message: '企业微信已启用但凭据未配置' }
+            : { status: 'ok', message: '企业微信未启用' },
+      },
+      {
+        key: 'telegram',
+        enabledKey: 'TELEGRAM_ENABLED',
+        check: (s) => s.TELEGRAM_ENABLED === 'true' && s.TELEGRAM_BOT_TOKEN
+          ? { status: 'ok', message: 'Telegram 凭据已配置' }
+          : s.TELEGRAM_ENABLED === 'true'
+            ? { status: 'warning', message: 'Telegram 已启用但凭据未配置' }
+            : { status: 'ok', message: 'Telegram 未启用' },
+      },
+      {
+        key: 'qq',
+        enabledKey: 'QQ_ENABLED',
+        check: (s) => {
+          if (s.QQ_ENABLED !== 'true') return { status: 'ok', message: 'QQ 未启用' };
+          const protocol = s.QQ_PROTOCOL || 'onebot';
+          if (protocol === 'official') {
+            return s.QQ_APP_ID && s.QQ_SECRET
+              ? { status: 'ok', message: 'QQ 官方 API 已配置' }
+              : { status: 'warning', message: 'QQ 已启用但官方 API 凭据未配置' };
+          }
+          return s.QQ_ONEBOT_WS_URL || s.QQ_ONEBOT_HTTP_URL
+            ? { status: 'ok', message: 'QQ OneBot 已配置' }
+            : { status: 'warning', message: 'QQ 已启用但 OneBot 地址未配置' };
+        },
+      },
+      {
+        key: 'whatsapp',
+        enabledKey: 'WHATSAPP_ENABLED',
+        check: (s) => {
+          if (s.WHATSAPP_ENABLED !== 'true') return { status: 'ok', message: 'WhatsApp 未启用' };
+          const mode = s.WHATSAPP_MODE || 'personal';
+          if (mode === 'business') {
+            return s.WHATSAPP_BUSINESS_PHONE_ID && s.WHATSAPP_BUSINESS_ACCESS_TOKEN
+              ? { status: 'ok', message: 'WhatsApp Business API 已配置' }
+              : { status: 'warning', message: 'WhatsApp Business 已启用但凭据未配置' };
+          }
+          return { status: 'ok', message: 'WhatsApp Personal 模式已启用' };
+        },
+      },
+      {
+        key: 'weixin',
+        enabledKey: 'WEIXIN_ENABLED',
+        check: (s) => {
+          if (s.WEIXIN_ENABLED !== 'true') return { status: 'ok', message: '个人微信未启用' };
+          const accounts = configStore.getWeixinAccounts();
+          const enabledAccounts = accounts.filter(a => a.enabled === 1);
+          return enabledAccounts.length > 0
+            ? { status: 'ok', message: `个人微信已配置 ${enabledAccounts.length} 个账号` }
+            : { status: 'warning', message: '个人微信已启用但无有效账号' };
+        },
+      },
+      {
+        key: 'dingtalk',
+        enabledKey: 'DINGTALK_ENABLED',
+        check: (s) => {
+          if (s.DINGTALK_ENABLED !== 'true') return { status: 'ok', message: '钉钉未启用' };
+          const accounts = configStore.getDingtalkAccounts();
+          const enabledAccounts = accounts.filter(a => a.enabled === 1);
+          return enabledAccounts.length > 0
+            ? { status: 'ok', message: `钉钉已配置 ${enabledAccounts.length} 个账号` }
+            : { status: 'warning', message: '钉钉已启用但无有效账号' };
+        },
+      },
+    ];
+
+    for (const pc of platformChecks) {
+      try {
+        const settings = configStore.get() as Record<string, string>;
+        health.checks[pc.key] = pc.check(settings);
+      } catch (e: unknown) {
+        health.checks[pc.key] = { status: 'error', message: e instanceof Error ? e.message : 'Unknown error' };
+      }
+    }
+
+    res.json(health);
+  });
+
+  // ── GET /api/admin/autostart（查询开机自启状态）
+  router.get('/autostart', (_req, res) => {
+    try {
+      res.json(getAutoStart());
+    } catch (e: unknown) {
+      res.status(500).json({ error: e instanceof Error ? e.message : '查询自启状态失败' });
+    }
+  });
+
+  // ── PUT /api/admin/autostart（启用/关闭开机自启）
+  router.put('/autostart', (req, res) => {
+    const { enabled } = req.body || {};
+    if (typeof enabled !== 'boolean') {
+      res.status(400).json({ error: 'enabled 必须为布尔值' });
+      return;
+    }
+    try {
+      setAutoStart(enabled);
+      res.json({ ok: true, ...getAutoStart() });
+    } catch (e: unknown) {
+      res.status(500).json({ error: e instanceof Error ? e.message : '设置自启失败' });
     }
   });
 

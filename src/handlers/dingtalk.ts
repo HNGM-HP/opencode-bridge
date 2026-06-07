@@ -11,64 +11,14 @@ import { opencodeClient } from '../opencode/client.js';
 import { outputBuffer } from '../opencode/output-buffer.js';
 import { chatSessionStore } from '../store/chat-session.js';
 import { parseCommand, type ParsedCommand } from '../commands/parser.js';
+import { normalizeEffortLevel, type EffortLevel } from '../commands/effort.js';
 import { DirectoryPolicy } from '../utils/directory-policy.js';
 import { buildSessionTimestamp } from '../utils/session-title.js';
 import { shouldSkipGroupMessage } from '../utils/group-mention.js';
 import { permissionHandler } from '../permissions/handler.js';
 import { PlatformCommandHandler } from './platform-command.handler.js';
-
-type PermissionDecision = {
-  allow: boolean;
-  remember: boolean;
-};
-
-function parsePermissionDecision(raw: string): PermissionDecision | null {
-  const normalized = raw.normalize('NFKC').trim().toLowerCase();
-  if (!normalized) {
-    return null;
-  }
-
-  const compact = normalized
-    .replace(/[\s\u3000]+/g, '')
-    .replace(/[。！!,.，；;:：\-]/g, '');
-
-  const hasAlways =
-    compact.includes('始终')
-    || compact.includes('永久')
-    || compact.includes('always')
-    || compact.includes('记住')
-    || compact.includes('总是');
-
-  const containsAny = (words: string[]): boolean => {
-    return words.some(word => compact === word || compact.includes(word));
-  };
-
-  const isDeny =
-    compact === 'n'
-    || compact === 'no'
-    || compact === '否'
-    || compact === '拒绝'
-    || containsAny(['拒绝', '不同意', '不允许', 'deny']);
-
-  if (isDeny) {
-    return { allow: false, remember: false };
-  }
-
-  const isAllow =
-    compact === 'y'
-    || compact === 'yes'
-    || compact === 'ok'
-    || compact === 'always'
-    || compact === '允许'
-    || compact === '始终允许'
-    || containsAny(['允许', '同意', '通过', '批准', 'allow']);
-
-  if (isAllow) {
-    return { allow: true, remember: hasAlways };
-  }
-
-  return null;
-}
+import type { PermissionDecision } from './dingtalk-types.js';
+import { parsePermissionDecision } from './dingtalk-utils.js';
 
 export class DingtalkHandler {
   private readonly commandHandler = new PlatformCommandHandler('dingtalk');
@@ -322,8 +272,66 @@ export class DingtalkHandler {
         dispatchOptions.fallbackDirectories = fallbackDirectories;
       }
 
-      if (promptEffort) {
-        dispatchOptions.effort = promptEffort;
+      // 确定 effort（优先使用 promptEffort，其次是 sessionConfig.preferredEffort）
+      let effectiveEffort = promptEffort || sessionConfig?.preferredEffort;
+
+      // 验证 effort 是否与当前模型兼容
+      if (effectiveEffort && sessionConfig?.preferredModel) {
+        const [providerId, modelId] = sessionConfig.preferredModel.split(':');
+        if (providerId && modelId) {
+          try {
+            const providersPayload = await opencodeClient.getProviders();
+            const providers = Array.isArray(providersPayload.providers) ? providersPayload.providers : [];
+            const providerLower = providerId.toLowerCase();
+            const modelLower = modelId.toLowerCase();
+
+            for (const provider of providers) {
+              if (!provider || typeof provider !== 'object') continue;
+              const providerRecord = provider as Record<string, unknown>;
+              const providerIdRaw = typeof providerRecord.id === 'string' ? providerRecord.id.trim() : '';
+              if (!providerIdRaw || providerIdRaw.toLowerCase() !== providerLower) continue;
+
+              const modelsRaw = providerRecord.models;
+              const modelList = Array.isArray(modelsRaw)
+                ? modelsRaw
+                : (modelsRaw && typeof modelsRaw === 'object' ? Object.values(modelsRaw) : []);
+
+              for (const modelItem of modelList) {
+                if (!modelItem || typeof modelItem !== 'object') continue;
+                const modelRecord = modelItem as Record<string, unknown>;
+                const modelIdRaw = typeof modelRecord.id === 'string'
+                  ? modelRecord.id.trim()
+                  : (typeof modelRecord.modelID === 'string' ? modelRecord.modelID.trim() : '');
+                if (!modelIdRaw || modelIdRaw.toLowerCase() !== modelLower) continue;
+
+                // 解析模型支持的 variants
+                const variants = modelRecord.variants;
+                if (variants && typeof variants === 'object' && !Array.isArray(variants)) {
+                  const supportedVariants: EffortLevel[] = [];
+                  for (const key of Object.keys(variants as Record<string, unknown>)) {
+                    const normalized = normalizeEffortLevel(key);
+                    if (normalized && normalized !== 'none' && !supportedVariants.includes(normalized)) {
+                      supportedVariants.push(normalized);
+                    }
+                  }
+                  // 如果当前 effort 不在支持列表中，清除它
+                  const normalizedEffort = normalizeEffortLevel(effectiveEffort);
+                  if (normalizedEffort && supportedVariants.length > 0 && !supportedVariants.includes(normalizedEffort)) {
+                    effectiveEffort = undefined;
+                  }
+                }
+                break;
+              }
+              break;
+            }
+          } catch (error) {
+            console.debug('[钉钉] 获取模型支持的 variants 失败，跳过验证:', error instanceof Error ? error.message : String(error));
+          }
+        }
+      }
+
+      if (effectiveEffort) {
+        dispatchOptions.effort = effectiveEffort;
       }
 
       if (sessionConfig?.preferredModel) {
@@ -332,10 +340,6 @@ export class DingtalkHandler {
 
       if (sessionConfig?.preferredAgent) {
         dispatchOptions.agent = sessionConfig.preferredAgent;
-      }
-
-      if (sessionConfig?.preferredEffort) {
-        dispatchOptions.effort = sessionConfig.preferredEffort;
       }
 
       // 发送消息到 OpenCode
@@ -349,3 +353,7 @@ export class DingtalkHandler {
 }
 
 export const dingtalkHandler = new DingtalkHandler();
+
+// Re-exports for backward compatibility
+export type { PermissionDecision } from './dingtalk-types.js';
+export { parsePermissionDecision } from './dingtalk-utils.js';

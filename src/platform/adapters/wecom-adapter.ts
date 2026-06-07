@@ -15,36 +15,8 @@ import type {
 } from '../types.js';
 import { wecomConfig } from '../../config.js';
 
-// 动态导入缓存：仅在启用时加载企业微信 SDK
-type WecomModule = typeof import('@wecom/aibot-node-sdk');
-let _wecomModule: WecomModule | null = null;
-async function getWecomModule(): Promise<WecomModule> {
-  if (!_wecomModule) {
-    _wecomModule = await import('@wecom/aibot-node-sdk');
-  }
-  return _wecomModule;
-}
-
-// 企业微信消息扩展类型（SDK BaseMessage 的扩展字段）
-interface WeComMessageExt {
-  text?: { content: string };
-  image?: { url?: string; aeskey?: string };
-  file?: {
-    url?: string;
-    aeskey?: string;
-    name?: string;
-    size?: number;
-  };
-  mixed?: {
-    msg_item: Array<{
-      msgtype: 'text' | 'image';
-      text?: { content: string };
-      image?: { url?: string; aeskey?: string };
-    }>;
-  };
-}
-
-type WeComMessageBody = BaseMessage & WeComMessageExt;
+import type { WeComMessageExt, WeComMessageBody } from './wecom-adapter-types.js';
+import { getWecomModule, splitText, guessFileTypeFromName } from './wecom-adapter-utils.js';
 
 /**
  * 企业微信平台发送器实现
@@ -61,7 +33,7 @@ class WeComSender implements PlatformSender {
 
     try {
       // 企业微信消息限制，使用 markdown 格式发送
-      const chunks = this.splitText(text);
+      const chunks = splitText(text);
       let firstMessageId: string | null = null;
 
       for (const chunk of chunks) {
@@ -125,30 +97,6 @@ class WeComSender implements PlatformSender {
     // 企业微信不支持撤回消息
     console.warn('[企业微信] 不支持删除消息');
     return false;
-  }
-
-  private splitText(text: string): string[] {
-    const DISCORD_MESSAGE_LIMIT = 1800; // 使用较保守的限制
-    if (!text.trim()) {
-      return [];
-    }
-    if (text.length <= DISCORD_MESSAGE_LIMIT) {
-      return [text];
-    }
-
-    const chunks: string[] = [];
-    let remaining = text;
-    while (remaining.length > DISCORD_MESSAGE_LIMIT) {
-      const candidate = remaining.slice(0, DISCORD_MESSAGE_LIMIT);
-      const breakAt = Math.max(candidate.lastIndexOf('\n'), candidate.lastIndexOf(' '));
-      const cut = breakAt > Math.floor(DISCORD_MESSAGE_LIMIT * 0.5) ? breakAt : DISCORD_MESSAGE_LIMIT;
-      chunks.push(remaining.slice(0, cut));
-      remaining = remaining.slice(cut).trimStart();
-    }
-    if (remaining.length > 0) {
-      chunks.push(remaining);
-    }
-    return chunks;
   }
 }
 
@@ -244,9 +192,11 @@ export class WeComAdapter implements PlatformAdapter {
     if (this.wsClient) {
       this.wsClient.disconnect();
       this.wsClient = null;
-      this.isActive = false;
-      console.log('[企业微信] 适配器已停止');
     }
+    this.isActive = false;
+    this.messageCallbacks.length = 0;
+    this.actionCallbacks.length = 0;
+    console.log('[企业微信] 适配器已停止');
   }
 
   getSender(): PlatformSender {
@@ -343,7 +293,7 @@ export class WeComAdapter implements PlatformAdapter {
           type: 'file',
           fileKey: body.file.url,
           fileName,
-          fileType: this.guessFileTypeFromName(fileName),
+          fileType: guessFileTypeFromName(fileName),
           fileSize,
         });
       }
@@ -355,25 +305,6 @@ export class WeComAdapter implements PlatformAdapter {
     };
   }
 
-  // 根据文件名猜测文件类型
-  private guessFileTypeFromName(fileName: string): string {
-    const ext = fileName.split('.').pop()?.toLowerCase();
-    switch (ext) {
-      case 'png':
-        return 'image/png';
-      case 'jpg':
-      case 'jpeg':
-        return 'image/jpeg';
-      case 'gif':
-        return 'image/gif';
-      case 'webp':
-        return 'image/webp';
-      case 'pdf':
-        return 'application/pdf';
-      default:
-        return 'application/octet-stream';
-    }
-  }
 }
 
 // 单例导出

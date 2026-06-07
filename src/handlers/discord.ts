@@ -26,6 +26,7 @@ import { permissionHandler } from '../permissions/handler.js';
 import { chatSessionStore } from '../store/chat-session.js';
 import { validateFilePath } from './file-sender.js';
 import { DirectoryPolicy } from '../utils/directory-policy.js';
+import { isChatModelAllowed, parseChatModelReference } from '../utils/chat-model-whitelist.js';
 import type { PlatformMessageEvent, PlatformSender } from '../platform/types.js';
 import {
   buildCronHelpText,
@@ -34,133 +35,35 @@ import {
   resolveCronIntentForExecution,
   type CronIntent,
 } from '../reliability/cron-control.js';
-import { getRuntimeCronManager } from '../reliability/runtime-cron-registry.js';
+import { getRuntimeCronManager } from '../reliability/runtime-cron.js';
 import { formatRestartResultText, restartOpenCodeProcess } from '../reliability/opencode-restart.js';
 import { parseCronIntentWithOpenCode } from '../reliability/cron-semantic.js';
 
-const PANEL_SELECT_PREFIX = 'oc_panel';
-const BIND_SELECT_PREFIX = 'oc_bind';
-const RENAME_MODAL_PREFIX = 'oc_rename';
-const QUESTION_SELECT_PREFIX = 'oc_question';
-const MODEL_SELECT_PREFIX = 'oc_model';
-const AGENT_SELECT_PREFIX = 'oc_agent';
-const RENAME_INPUT_ID = 'session_name';
-const MAX_SESSION_OPTIONS = 25;
-const MAX_MODEL_OPTIONS = 500;
-const MODEL_PAGE_SIZE = 24;
-const DISCORD_FILE_MAX_SIZE = 25 * 1024 * 1024;
+import {
+  PANEL_SELECT_PREFIX,
+  BIND_SELECT_PREFIX,
+  RENAME_MODAL_PREFIX,
+  QUESTION_SELECT_PREFIX,
+  MODEL_SELECT_PREFIX,
+  AGENT_SELECT_PREFIX,
+  RENAME_INPUT_ID,
+  MAX_SESSION_OPTIONS,
+  MAX_MODEL_OPTIONS,
+  MODEL_PAGE_SIZE,
+  DISCORD_FILE_MAX_SIZE,
+  type ParsedQuestionAnswer,
+  type PermissionDecision,
+  type DiscordCommand,
+} from './discord-types.js';
 
-type ParsedQuestionAnswer = NonNullable<ReturnType<typeof parseQuestionAnswerText>>;
+import {
+  normalizeMessageText,
+  parsePermissionDecision,
+  parseDiscordCommand,
+  parseConversationIdFromCustomId,
+  parseNaturalFileSendText,
+} from './discord-utils.js';
 
-function normalizeMessageText(value: string): string {
-  return value.trim();
-}
-
-type PermissionDecision = {
-  allow: boolean;
-  remember: boolean;
-};
-
-function parsePermissionDecision(raw: string): PermissionDecision | null {
-  const normalized = raw.normalize('NFKC').trim().toLowerCase();
-  if (!normalized) {
-    return null;
-  }
-
-  const compact = normalized
-    .replace(/[\s\u3000]+/g, '')
-    .replace(/[。！!,.，；;:：\-]/g, '');
-
-  const hasAlways =
-    compact.includes('始终')
-    || compact.includes('永久')
-    || compact.includes('always')
-    || compact.includes('记住')
-    || compact.includes('总是');
-
-  const containsAny = (words: string[]): boolean => {
-    return words.some(word => compact === word || compact.includes(word));
-  };
-
-  const isDeny =
-    compact === 'n'
-    || compact === 'no'
-    || compact === '否'
-    || compact === '拒绝'
-    || containsAny(['拒绝', '不同意', '不允许', 'deny']);
-
-  if (isDeny) {
-    return { allow: false, remember: false };
-  }
-
-  const isAllow =
-    compact === 'y'
-    || compact === 'yes'
-    || compact === 'ok'
-    || compact === 'always'
-    || compact === '允许'
-    || compact === '始终允许'
-    || containsAny(['允许', '同意', '通过', '批准', 'allow']);
-
-  if (isAllow) {
-    return { allow: true, remember: hasAlways };
-  }
-
-  return null;
-}
-
-type DiscordCommand = {
-  name: string;
-  args: string;
-};
-
-function parseDiscordCommand(text: string): DiscordCommand | null {
-  const normalized = text.trim();
-  if (!normalized) {
-    return null;
-  }
-
-  const commandPrefix = normalized.startsWith('///')
-    ? '///'
-    : normalized.startsWith('/')
-      ? '/'
-      : null;
-
-  if (!commandPrefix) {
-    return null;
-  }
-
-  const body = normalized.slice(commandPrefix.length).trim();
-  if (!body) {
-    return null;
-  }
-
-  const [name, ...rest] = body.split(/\s+/);
-  return {
-    name: name.toLowerCase(),
-    args: rest.join(' ').trim(),
-  };
-}
-
-function parseConversationIdFromCustomId(prefix: string, customId: string): string | null {
-  const expectedPrefix = `${prefix}:`;
-  if (!customId.startsWith(expectedPrefix)) {
-    return null;
-  }
-
-  const value = customId.slice(expectedPrefix.length).trim();
-  return value.length > 0 ? value : null;
-}
-
-function parseNaturalFileSendText(text: string): string | null {
-  const matched = text.trim().match(/^发送文件\s+(.+)$/u);
-  if (!matched) {
-    return null;
-  }
-
-  const value = matched[1].trim();
-  return value || null;
-}
 
 class DiscordHandler {
   constructor(private readonly sender: PlatformSender) {}
@@ -649,6 +552,9 @@ class DiscordHandler {
           ? modelRecord.id.trim()
           : (typeof modelRecord.modelID === 'string' ? modelRecord.modelID.trim() : '');
         if (!modelId) {
+          continue;
+        }
+        if (!isChatModelAllowed(providerId, modelId)) {
           continue;
         }
 
@@ -1713,7 +1619,16 @@ class DiscordHandler {
 
     const session = chatSessionStore.getSessionByConversation('discord', event.conversationId);
     const preferredModel = this.parseProviderModel(session?.preferredModel);
-    const variant = effortParsed.effort || session?.preferredEffort;
+    let variant = effortParsed.effort || session?.preferredEffort;
+
+    // 验证 variant 是否与当前模型兼容
+    if (variant) {
+      const support = await this.getEffortSupportInfo(event.conversationId);
+      if (support.supportedEfforts.length > 0 && !support.supportedEfforts.includes(variant)) {
+        // 当前模型不支持该 variant，不传递（让模型自动选择）
+        variant = undefined;
+      }
+    }
 
     const pendingMessageId = await this.safePending(event);
     try {
@@ -2210,6 +2125,12 @@ ${pending.risk ? `- 风险：${pending.risk}` : ''}
     if (selected === 'none') {
       chatSessionStore.updateConfigByConversation('discord', conversationId, { preferredModel: undefined });
       await this.safeInteractionReply(interaction, '✅ 已切换为默认模型。');
+      return;
+    }
+
+    const parsedModel = parseChatModelReference(selected);
+    if (!parsedModel || !isChatModelAllowed(parsedModel.providerId, parsedModel.modelId)) {
+      await this.safeInteractionReply(interaction, '❌ 该模型不在当前允许列表中。');
       return;
     }
 

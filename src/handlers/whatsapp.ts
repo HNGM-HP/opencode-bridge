@@ -7,9 +7,11 @@
 
 import { modelConfig, attachmentConfig } from '../config.js';
 import { opencodeClient } from '../opencode/client.js';
+import { preprocessVisionParts, type VisionPart } from '../services/vision-ocr.js';
 import { outputBuffer } from '../opencode/output-buffer.js';
 import { chatSessionStore } from '../store/chat-session.js';
 import { parseCommand } from '../commands/parser.js';
+import { normalizeEffortLevel, type EffortLevel } from '../commands/effort.js';
 import { PlatformCommandHandler } from './platform-command.handler.js';
 import { DirectoryPolicy } from '../utils/directory-policy.js';
 import { buildSessionTimestamp } from '../utils/session-title.js';
@@ -18,67 +20,9 @@ import { permissionHandler } from '../permissions/handler.js';
 import { questionHandler } from '../opencode/question-handler.js';
 import { parseQuestionAnswerText } from '../opencode/question-parser.js';
 import type { PlatformMessageEvent, PlatformSender } from '../platform/types.js';
-import type { EffortLevel } from '../commands/effort.js';
 import type { PendingPermission } from '../permissions/handler.js';
-
-type OpencodeFilePartInput = { type: 'file'; mime: string; url: string; filename?: string };
-type OpencodePartInput = { type: 'text'; text: string } | OpencodeFilePartInput;
-
-/**
- * 权限决策结果
- */
-type PermissionDecision = {
-  allow: boolean;
-  remember: boolean;
-};
-
-/**
- * 解析权限决策文本
- * 支持：允许 / 拒绝 / 始终允许 / y / n / always 等
- */
-function parsePermissionDecision(raw: string): PermissionDecision | null {
-  const normalized = raw.normalize('NFKC').trim().toLowerCase();
-  if (!normalized) return null;
-
-  const compact = normalized
-    .replace(/[\s\u3000]+/g, '')
-    .replace(/[。！!,.，；;:：\-]/g, '');
-
-  const hasAlways =
-    compact.includes('始终') ||
-    compact.includes('永久') ||
-    compact.includes('always') ||
-    compact.includes('记住') ||
-    compact.includes('总是');
-
-  const containsAny = (words: string[]): boolean => {
-    return words.some(word => compact === word || compact.includes(word));
-  };
-
-  const isDeny =
-    compact === 'n' ||
-    compact === 'no' ||
-    compact === '否' ||
-    compact === '拒绝' ||
-    containsAny(['拒绝', '不同意', '不允许', 'deny']);
-  if (isDeny) {
-    return { allow: false, remember: false };
-  }
-
-  const isAllow =
-    compact === 'y' ||
-    compact === 'yes' ||
-    compact === 'ok' ||
-    compact === 'always' ||
-    compact === '允许' ||
-    compact === '始终允许' ||
-    containsAny(['允许', '同意', '通过', '批准', 'allow']);
-  if (isAllow) {
-    return { allow: true, remember: hasAlways };
-  }
-
-  return null;
-}
+import type { OpencodeFilePartInput, OpencodePartInput, PermissionDecision } from './whatsapp-types.js';
+import { parsePermissionDecision } from './whatsapp-utils.js';
 
 export class WhatsAppHandler {
   private commandHandler = new PlatformCommandHandler('whatsapp');
@@ -613,10 +557,69 @@ export class WhatsAppHandler {
       const sessionData = chatSessionStore.getSessionByConversation('whatsapp', chatId);
       const directory = sessionData?.resolvedDirectory;
 
-      const variant = promptEffort || config?.preferredEffort;
+      let variant = promptEffort || config?.preferredEffort;
+
+      // 验证 variant 是否与当前模型兼容
+      if (variant && providerId && modelId) {
+        try {
+          const providersPayload = await opencodeClient.getProviders();
+          const providers = Array.isArray(providersPayload.providers) ? providersPayload.providers : [];
+          const providerLower = providerId.toLowerCase();
+          const modelLower = modelId.toLowerCase();
+
+          for (const provider of providers) {
+            if (!provider || typeof provider !== 'object') continue;
+            const providerRecord = provider as Record<string, unknown>;
+            const providerIdRaw = typeof providerRecord.id === 'string' ? providerRecord.id.trim() : '';
+            if (!providerIdRaw || providerIdRaw.toLowerCase() !== providerLower) continue;
+
+            const modelsRaw = providerRecord.models;
+            const modelList = Array.isArray(modelsRaw)
+              ? modelsRaw
+              : (modelsRaw && typeof modelsRaw === 'object' ? Object.values(modelsRaw) : []);
+
+            for (const modelItem of modelList) {
+              if (!modelItem || typeof modelItem !== 'object') continue;
+              const modelRecord = modelItem as Record<string, unknown>;
+              const modelIdRaw = typeof modelRecord.id === 'string'
+                ? modelRecord.id.trim()
+                : (typeof modelRecord.modelID === 'string' ? modelRecord.modelID.trim() : '');
+              if (!modelIdRaw || modelIdRaw.toLowerCase() !== modelLower) continue;
+
+              // 解析模型支持的 variants
+              const variants = modelRecord.variants;
+              if (variants && typeof variants === 'object' && !Array.isArray(variants)) {
+                const supportedVariants: EffortLevel[] = [];
+                for (const key of Object.keys(variants as Record<string, unknown>)) {
+                  const normalized = normalizeEffortLevel(key);
+                  if (normalized && normalized !== 'none' && !supportedVariants.includes(normalized)) {
+                    supportedVariants.push(normalized);
+                  }
+                }
+                // 如果当前 variant 不在支持列表中，清除它
+                if (supportedVariants.length > 0 && !supportedVariants.includes(variant)) {
+                  variant = undefined;
+                }
+              }
+              break;
+            }
+            break;
+          }
+        } catch (error) {
+          console.debug('[WhatsApp] 获取模型支持的 variants 失败，跳过验证:', error instanceof Error ? error.message : String(error));
+        }
+      }
+
+      // ── 非多模态主模型图片回退 ──
+      const dispatchParts = await preprocessVisionParts(
+        parts as VisionPart[],
+        { providerId, modelId, directory },
+        'WhatsApp',
+      ) as OpencodePartInput[];
+
       await opencodeClient.sendMessagePartsAsync(
         sessionId,
-        parts,
+        dispatchParts,
         {
           providerId,
           modelId,
@@ -701,3 +704,7 @@ export class WhatsAppHandler {
 }
 
 export const whatsappHandler = new WhatsAppHandler();
+
+// Re-exports for backward compatibility
+export type { OpencodeFilePartInput, OpencodePartInput, PermissionDecision } from './whatsapp-types.js';
+export { parsePermissionDecision } from './whatsapp-utils.js';

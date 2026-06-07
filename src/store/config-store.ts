@@ -7,156 +7,41 @@
  * 3. 首次启动时若无 DB 则返回空对象，由 config.ts 决定是否迁移 .env
  */
 
-import Database from 'better-sqlite3';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import type Database from 'better-sqlite3';
+import type { BridgeSettings, WeixinAccountRow, DingtalkAccountRow } from './config-store-types.js';
 
-// ──────────────────────────────────────────────
-// 数据结构：与 .env.example 完整对应的扁平 KV 类型
-// ──────────────────────────────────────────────
-export interface BridgeSettings {
-  // 飞书
-  FEISHU_ENABLED?: string;
-  FEISHU_APP_ID?: string;
-  FEISHU_APP_SECRET?: string;
-  FEISHU_ENCRYPT_KEY?: string;
-  FEISHU_VERIFICATION_TOKEN?: string;
+let DatabaseCtor: typeof Database;
 
-  // 白名单
-  ALLOWED_USERS?: string;
-
-  // 平台过滤
-  ENABLED_PLATFORMS?: string;
-
-  // Discord
-  DISCORD_ENABLED?: string;
-  DISCORD_TOKEN?: string;
-  DISCORD_CLIENT_ID?: string;
-  DISCORD_ALLOWED_BOT_IDS?: string;
-
-  // 企业微信
-  WECOM_ENABLED?: string;
-  WECOM_BOT_ID?: string;
-  WECOM_SECRET?: string;
-
-  // 个人微信
-  WEIXIN_ENABLED?: string;
-
-  // 钉钉
-  DINGTALK_ENABLED?: string;
-
-  // Telegram
-  TELEGRAM_ENABLED?: string;
-  TELEGRAM_BOT_TOKEN?: string;
-
-  // QQ (支持官方 API 和 OneBot 双协议)
-  QQ_ENABLED?: string;
-  QQ_PROTOCOL?: string; // 'official' | 'onebot'
-  // OneBot 协议
-  QQ_ONEBOT_HTTP_URL?: string;
-  QQ_ONEBOT_WS_URL?: string;
-  // QQ 官方 API
-  QQ_APP_ID?: string;
-  QQ_SECRET?: string;
-  QQ_CALLBACK_URL?: string;
-  QQ_ENCRYPT_KEY?: string;
-
-  // WhatsApp
-  WHATSAPP_ENABLED?: string;
-  WHATSAPP_MODE?: string; // 'personal' | 'business'
-  WHATSAPP_SESSION_PATH?: string;
-  WHATSAPP_BUSINESS_PHONE_ID?: string;
-  WHATSAPP_BUSINESS_ACCESS_TOKEN?: string;
-  WHATSAPP_BUSINESS_WEBHOOK_VERIFY_TOKEN?: string;
-
-  // OpenCode 连接
-  OPENCODE_HOST?: string;
-  OPENCODE_PORT?: string;
-  OPENCODE_AUTO_START?: string;
-  OPENCODE_AUTO_START_CMD?: string;
-  OPENCODE_SERVER_USERNAME?: string;
-  OPENCODE_SERVER_PASSWORD?: string;
-  OPENCODE_CONFIG_FILE?: string;
-
-  // 可靠性 - Cron 调度
-  RELIABILITY_CRON_ENABLED?: string;
-  RELIABILITY_CRON_API_ENABLED?: string;
-  RELIABILITY_CRON_API_HOST?: string;
-  RELIABILITY_CRON_API_PORT?: string;
-  RELIABILITY_CRON_API_TOKEN?: string;
-  RELIABILITY_CRON_JOBS_FILE?: string;
-  RELIABILITY_CRON_ORPHAN_AUTO_CLEANUP?: string;
-  RELIABILITY_CRON_FORWARD_TO_PRIVATE?: string;
-  RELIABILITY_CRON_FALLBACK_FEISHU_CHAT_ID?: string;
-  RELIABILITY_CRON_FALLBACK_DISCORD_CONVERSATION_ID?: string;
-
-  // 可靠性 - 心跳
-  RELIABILITY_PROACTIVE_HEARTBEAT_ENABLED?: string;
-  RELIABILITY_INBOUND_HEARTBEAT_ENABLED?: string;
-  RELIABILITY_HEARTBEAT_INTERVAL_MS?: string;
-  RELIABILITY_HEARTBEAT_AGENT?: string;
-  RELIABILITY_HEARTBEAT_PROMPT?: string;
-  RELIABILITY_HEARTBEAT_ALERT_CHATS?: string;
-
-  // 可靠性 - 救援策略
-  RELIABILITY_FAILURE_THRESHOLD?: string;
-  RELIABILITY_WINDOW_MS?: string;
-  RELIABILITY_COOLDOWN_MS?: string;
-  RELIABILITY_REPAIR_BUDGET?: string;
-  RELIABILITY_MODE?: string;
-  RELIABILITY_LOOPBACK_ONLY?: string;
-
-  // 群聊行为
-  GROUP_REQUIRE_MENTION?: string;
-  GROUP_REPLY_REQUIRE_MENTION?: string;
-
-  // 输出显示
-  SHOW_THINKING_CHAIN?: string;
-  SHOW_TOOL_CHAIN?: string;
-  FEISHU_SHOW_THINKING_CHAIN?: string;
-  FEISHU_SHOW_TOOL_CHAIN?: string;
-  DISCORD_SHOW_THINKING_CHAIN?: string;
-  DISCORD_SHOW_TOOL_CHAIN?: string;
-  WECOM_SHOW_THINKING_CHAIN?: string;
-  WECOM_SHOW_TOOL_CHAIN?: string;
-  TELEGRAM_SHOW_THINKING_CHAIN?: string;
-  TELEGRAM_SHOW_TOOL_CHAIN?: string;
-  QQ_SHOW_THINKING_CHAIN?: string;
-  QQ_SHOW_TOOL_CHAIN?: string;
-  WHATSAPP_SHOW_THINKING_CHAIN?: string;
-  WHATSAPP_SHOW_TOOL_CHAIN?: string;
-  WEIXIN_SHOW_THINKING_CHAIN?: string;
-  WEIXIN_SHOW_TOOL_CHAIN?: string;
-  DINGTALK_SHOW_THINKING_CHAIN?: string;
-  DINGTALK_SHOW_TOOL_CHAIN?: string;
-
-  // 工作目录
-  ALLOWED_DIRECTORIES?: string;
-  DEFAULT_WORK_DIRECTORY?: string;
-  PROJECT_ALIASES?: string;
-  GIT_ROOT_NORMALIZATION?: string;
-
-  // 工具 / 权限
-  TOOL_WHITELIST?: string;
-  PERMISSION_REQUEST_TIMEOUT_MS?: string;
-
-  // 输出控制
-  OUTPUT_UPDATE_INTERVAL?: string;
-  MAX_DELAYED_RESPONSE_WAIT_MS?: string;
-
-  // 会话绑定
-  ENABLE_MANUAL_SESSION_BIND?: string;
-
-  // 路由模式
-  ROUTER_MODE?: string;
-
-  // 附件
-  ATTACHMENT_MAX_SIZE?: string;
-
-  // 模型（扩展字段，.env.example 未列出但 config.ts 引用）
-  DEFAULT_PROVIDER?: string;
-  DEFAULT_MODEL?: string;
+try {
+  DatabaseCtor = (await import('better-sqlite3')).default;
+} catch (err: any) {
+  const msg = [
+    '[ConfigStore] FATAL: 无法加载 better-sqlite3 原生模块。',
+    `[ConfigStore] 平台: ${process.platform} 架构: ${process.arch} Node: ${process.versions.node}`,
+    `[ConfigStore] 错误: ${err?.message || err}`,
+  ];
+  if (process.platform === 'darwin') {
+    msg.push(
+      '[ConfigStore] macOS 排查建议:',
+      '  1. 确认下载的安装包与 CPU 架构匹配 (arm64 = Apple Silicon, x64 = Intel)',
+      '  2. 执行: xattr -cr "/Applications/OpenCode Bridge.app"  (移除安全隔离)',
+      '  3. 删除配置数据库后重试: rm ~/Library/Application\\ Support/opencode-bridge/data/config.db',
+    );
+  }
+  if (process.platform === 'linux' && process.env.ELECTRON_RUN_AS_NODE === '1') {
+    msg.push(
+      '[ConfigStore] Linux Electron 环境排查建议:',
+      '  1. 确认已执行 electron-rebuild: npm run rebuild',
+      '  2. 检查 .node 文件权限: ls -la node_modules/better-sqlite3/prebuilds/',
+    );
+  }
+  for (const line of msg) {
+    console.error(line);
+  }
+  throw err;
 }
 
 // ──────────────────────────────────────────────
@@ -186,7 +71,7 @@ class ConfigStore {
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }
-    this.db = new Database(this.dbPath);
+    this.db = new DatabaseCtor(this.dbPath);
     this.initSchema();
   }
 
@@ -299,68 +184,32 @@ class ConfigStore {
       .run();
   }
 
+  // 注：管理后台已彻底移除账号 / 密码鉴权及登录超时机制，
+  // 原 getAdminPassword / setAdminPassword / needsPasswordChange /
+  // getPasswordChangedAt / setPasswordChangedAt /
+  // getLoginTimeout / setLoginTimeout 等接口已删除。
+  // admin_meta 表中遗留的相关字段不再读写，老数据会被自然忽略。
+
   // ──────────────────────────────────────────────
-  // 密码管理
+  // 首次安装引导（onboarding）状态
   // ──────────────────────────────────────────────
 
-  /** 获取管理员密码（数据库存储） */
-  getAdminPassword(): string | null {
+  /** 是否已完成或跳过首次安装引导 */
+  isOnboardingCompleted(): boolean {
     const row = this.db
-      .prepare<[], { value: string }>(`SELECT value FROM admin_meta WHERE key = 'admin_password'`)
+      .prepare<[], { value: string }>(`SELECT value FROM admin_meta WHERE key = 'onboarding_completed'`)
       .get();
-    const value = row?.value;
-    return value && value !== '' ? value : null;
+    return row?.value === '1';
   }
 
-  /** 设置管理员密码 */
-  setAdminPassword(password: string): void {
+  /** 设置引导完成标记（true=完成或跳过；false=重置以便重新展示） */
+  setOnboardingCompleted(completed: boolean): void {
     this.db
       .prepare(
-        `INSERT INTO admin_meta (key, value) VALUES ('admin_password', ?)
+        `INSERT INTO admin_meta (key, value) VALUES ('onboarding_completed', ?)
          ON CONFLICT(key) DO UPDATE SET value = excluded.value`
       )
-      .run(password);
-  }
-
-  /** 获取密码修改时间 */
-  getPasswordChangedAt(): string | null {
-    const row = this.db
-      .prepare<[], { value: string }>(`SELECT value FROM admin_meta WHERE key = 'password_changed_at'`)
-      .get();
-    return row?.value || null;
-  }
-
-  /** 设置密码修改时间 */
-  setPasswordChangedAt(timestamp: string): void {
-    this.db
-      .prepare(
-        `INSERT INTO admin_meta (key, value) VALUES ('password_changed_at', ?)
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value`
-      )
-      .run(timestamp);
-  }
-
-  /** 判断是否需要修改密码（首次登录） */
-  needsPasswordChange(): boolean {
-    return this.getPasswordChangedAt() === null;
-  }
-
-  /** 获取登录超时时间（分钟），0 表示不限制 */
-  getLoginTimeout(): number {
-    const row = this.db
-      .prepare<[], { value: string }>(`SELECT value FROM admin_meta WHERE key = 'login_timeout_minutes'`)
-      .get();
-    return row ? parseInt(row.value, 10) : 0;
-  }
-
-  /** 设置登录超时时间（分钟） */
-  setLoginTimeout(minutes: number): void {
-    this.db
-      .prepare(
-        `INSERT INTO admin_meta (key, value) VALUES ('login_timeout_minutes', ?)
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value`
-      )
-      .run(String(minutes));
+      .run(completed ? '1' : '0');
   }
 
   getDbPath(): string {
@@ -592,34 +441,5 @@ class ConfigStore {
 
 export const configStore = new ConfigStore();
 
-// ──────────────────────────────────────────────
-// 微信账号类型定义
-// ──────────────────────────────────────────────
-
-export interface WeixinAccountRow {
-  account_id: string;
-  user_id: string;
-  base_url: string;
-  cdn_base_url: string;
-  token: string;
-  name: string;
-  enabled: number;
-  last_login_at: string | null;
-  created_at: string;
-  updated_at: string;
-}
-
-// ──────────────────────────────────────────────
-// 钉钉账号类型定义
-// ──────────────────────────────────────────────
-
-export interface DingtalkAccountRow {
-  account_id: string;
-  client_id: string;
-  client_secret: string;
-  name: string;
-  enabled: number;
-  endpoint: string;
-  created_at: string;
-  updated_at: string;
-}
+// 向后兼容的类型重导出
+export type { BridgeSettings, WeixinAccountRow, DingtalkAccountRow } from './config-store-types.js';

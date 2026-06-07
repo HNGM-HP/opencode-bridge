@@ -10,12 +10,12 @@ import path from 'path';
 import { randomUUID } from 'crypto';
 import { modelConfig, attachmentConfig } from '../config.js';
 import { opencodeClient } from '../opencode/client.js';
+import { preprocessVisionParts, type VisionPart } from '../services/vision-ocr.js';
 import { outputBuffer } from '../opencode/output-buffer.js';
 import { chatSessionStore } from '../store/chat-session.js';
 import { parseCommand, getHelpText, type ParsedCommand } from '../commands/parser.js';
 import { DirectoryPolicy } from '../utils/directory-policy.js';
 import { buildSessionTimestamp } from '../utils/session-title.js';
-import { shouldSkipGroupMessage } from '../utils/group-mention.js';
 import type { PlatformMessageEvent, PlatformSender, PlatformAttachment } from '../platform/types.js';
 import type { EffortLevel } from '../commands/effort.js';
 import { normalizeEffortLevel, KNOWN_EFFORT_LEVELS } from '../commands/effort.js';
@@ -24,103 +24,33 @@ import { permissionHandler } from '../permissions/handler.js';
 import { questionHandler, type PendingQuestion } from '../opencode/question-handler.js';
 import { parseQuestionAnswerText } from '../opencode/question-parser.js';
 import { telegramAdapter } from '../platform/adapters/telegram-adapter.js';
+import {
+  collectAllowedChatModels,
+  findAllowedChatModel,
+  isChatModelAllowed,
+  parseChatModelReference,
+} from '../utils/chat-model-whitelist.js';
 
-// 附件相关配置
-const ATTACHMENT_BASE_DIR = path.resolve(process.cwd(), 'tmp', 'telegram-uploads');
-const ALLOWED_ATTACHMENT_EXTENSIONS = new Set([
-  '.png', '.jpg', '.jpeg', '.gif', '.webp', '.pdf',
-  '.mp4', '.mov', '.mp3', '.ogg', '.wav', '.m4a',
-]);
+import {
+  ATTACHMENT_BASE_DIR,
+  ALLOWED_ATTACHMENT_EXTENSIONS,
+  type ParsedQuestionAnswer,
+  type OpencodeFilePartInput,
+  type OpencodePartInput,
+  type PermissionDecision,
+} from './telegram-types.js';
 
-// Helper functions for file type detection
-function extractExtension(name: string): string {
-  return path.extname(name).toLowerCase();
-}
+import {
+  extractExtension,
+  mimeFromExtension,
+  sanitizeFilename,
+  parsePermissionDecision,
+} from './telegram-utils.js';
 
-function mimeFromExtension(ext: string): string {
-  switch (ext) {
-    case '.png': return 'image/png';
-    case '.jpg':
-    case '.jpeg': return 'image/jpeg';
-    case '.gif': return 'image/gif';
-    case '.webp': return 'image/webp';
-    case '.pdf': return 'application/pdf';
-    case '.mp4': return 'video/mp4';
-    case '.mov': return 'video/quicktime';
-    case '.mp3': return 'audio/mpeg';
-    case '.ogg': return 'audio/ogg';
-    case '.wav': return 'audio/wav';
-    case '.m4a': return 'audio/mp4';
-    default: return 'application/octet-stream';
-  }
-}
-
-function sanitizeFilename(name: string): string {
-  const cleaned = name.replace(/[\\/:*?"<>|]+/g, '_').trim();
-  return cleaned || 'attachment';
-}
-
-type ParsedQuestionAnswer = { type: 'skip' | 'custom' | 'selection'; values?: string[]; custom?: string };
-
-type OpencodeFilePartInput = { type: 'file'; mime: string; url: string; filename?: string };
-type OpencodePartInput = { type: 'text'; text: string } | OpencodeFilePartInput;
-
-type PermissionDecision = {
-  allow: boolean;
-  remember: boolean;
-};
-
-function parsePermissionDecision(raw: string): PermissionDecision | null {
-  const normalized = raw.normalize('NFKC').trim().toLowerCase();
-  if (!normalized) {
-    return null;
-  }
-
-  const compact = normalized
-    .replace(/[\s\u3000]+/g, '')
-    .replace(/[。！!,.，；;:：\-]/g, '');
-
-  const hasAlways =
-    compact.includes('始终')
-    || compact.includes('永久')
-    || compact.includes('always')
-    || compact.includes('记住')
-    || compact.includes('总是');
-
-  const containsAny = (words: string[]): boolean => {
-    return words.some(word => compact === word || compact.includes(word));
-  };
-
-  const isDeny =
-    compact === 'n'
-    || compact === 'no'
-    || compact === '否'
-    || compact === '拒绝'
-    || containsAny(['拒绝', '不同意', '不允许', 'deny']);
-
-  if (isDeny) {
-    return { allow: false, remember: false };
-  }
-
-  const isAllow =
-    compact === 'y'
-    || compact === 'yes'
-    || compact === 'ok'
-    || compact === 'always'
-    || compact === '允许'
-    || compact === '始终允许'
-    || containsAny(['允许', '同意', '通过', '批准', 'allow']);
-
-  if (isAllow) {
-    return { allow: true, remember: hasAlways };
-  }
-
-  return null;
-}
 
 export class TelegramHandler {
   private ensureStreamingBuffer(chatId: string, sessionId: string): void {
-    const key = `chat:${chatId}`;
+    const key = `chat:telegram:${chatId}`;
     const current = outputBuffer.get(key);
     if (current && current.status !== 'running') {
       outputBuffer.clear(key);
@@ -180,10 +110,8 @@ export class TelegramHandler {
     event: PlatformMessageEvent,
     sender: PlatformSender
   ): Promise<void> {
-    // 群聊 @ 提到检查
-    if (shouldSkipGroupMessage(event)) {
-      return;
-    }
+    // 注意：群聊 @ 提到检查已在 telegram-adapter 中处理（通过 botUsername 正则过滤），
+    // 此处不再重复调用 shouldSkipGroupMessage，避免因 mentions 字段未填充导致群消息被误丢弃。
 
     const { conversationId: chatId, content, senderId, attachments } = event;
     const trimmed = content.trim();
@@ -1082,8 +1010,27 @@ export class TelegramHandler {
 
       // 设置模型
       const normalizedModelName = modelName.trim();
-      chatSessionStore.updateConfigByConversation('telegram', chatId, { preferredModel: normalizedModelName });
-      await sender.sendText(chatId, `✅ 已设置模型: ${normalizedModelName}`);
+      const matchedModel = findAllowedChatModel(providers, normalizedModelName);
+      if (matchedModel) {
+        const preferredModel = `${matchedModel.providerId}:${matchedModel.modelId}`;
+        chatSessionStore.updateConfigByConversation('telegram', chatId, { preferredModel });
+        await sender.sendText(chatId, `✅ 已设置模型: ${preferredModel}`);
+        return;
+      }
+
+      const parsedModel = parseChatModelReference(normalizedModelName);
+      if (!parsedModel) {
+        await sender.sendText(chatId, `❌ 未找到模型: ${normalizedModelName}`);
+        return;
+      }
+      if (!isChatModelAllowed(parsedModel.providerId, parsedModel.modelId)) {
+        await sender.sendText(chatId, `❌ 模型 "${normalizedModelName}" 不在当前允许列表中`);
+        return;
+      }
+
+      const preferredModel = `${parsedModel.providerId}:${parsedModel.modelId}`;
+      chatSessionStore.updateConfigByConversation('telegram', chatId, { preferredModel });
+      await sender.sendText(chatId, `✅ 已设置模型: ${preferredModel}`);
     } catch (error) {
       console.error('[Telegram] 设置模型失败:', error);
       await sender.sendText(chatId, '❌ 设置模型失败');
@@ -1107,49 +1054,29 @@ export class TelegramHandler {
       const lines: string[] = ['📋 **可用模型列表**\n'];
       let totalCount = 0;
 
-      for (const provider of providers) {
-        const providerId = (provider as Record<string, unknown>).id as string | undefined;
-        const providerName = (provider as Record<string, unknown>).name || providerId || 'Unknown';
-        const rawModels = (provider as Record<string, unknown>).models;
+      const models = collectAllowedChatModels(providers);
+      const providerGroups = new Map<string, { providerName: string; models: Array<{ id: string; name: string }> }>();
 
-        // models 可能是数组，也可能是对象（Map）
-        const models: Array<{ id: string; name?: string }> = [];
-        if (Array.isArray(rawModels)) {
-          for (const m of rawModels) {
-            if (m && typeof m === 'object') {
-              const mr = m as Record<string, unknown>;
-              models.push({
-                id: (mr.id as string) || '',
-                name: mr.name as string | undefined,
-              });
-            }
-          }
-        } else if (rawModels && typeof rawModels === 'object') {
-          // SDK 返回的是对象 Map<string, Model>
-          const modelMap = rawModels as Record<string, unknown>;
-          for (const [modelId, modelInfo] of Object.entries(modelMap)) {
-            if (modelInfo && typeof modelInfo === 'object') {
-              const mi = modelInfo as Record<string, unknown>;
-              models.push({
-                id: modelId,
-                name: (mi.name as string) || modelId,
-              });
-            }
-          }
+      for (const model of models) {
+        if (!providerGroups.has(model.providerId)) {
+          providerGroups.set(model.providerId, { providerName: model.providerName, models: [] });
         }
+        providerGroups.get(model.providerId)!.models.push({ id: model.modelId, name: model.modelName });
+      }
 
-        if (models.length === 0) continue;
-        lines.push(`**${providerName}**`);
+      for (const [providerId, group] of providerGroups.entries()) {
+        if (group.models.length === 0) continue;
+        lines.push(`**${group.providerName}**`);
 
-        for (const model of models.slice(0, 15)) {
+        for (const model of group.models.slice(0, 15)) {
           const modelDisplay = model.name || model.id;
           const modelKey = `${providerId}:${model.id}`;
           lines.push(`  • ${modelDisplay} (\`${modelKey}\`)`);
           totalCount++;
         }
 
-        if (models.length > 15) {
-          lines.push(`  _... 共 ${models.length} 个模型_`);
+        if (group.models.length > 15) {
+          lines.push(`  _... 共 ${group.models.length} 个模型_`);
         }
         lines.push('');
       }
@@ -1479,7 +1406,7 @@ export class TelegramHandler {
     promptEffort?: EffortLevel,
     sender?: PlatformSender
   ): Promise<void> {
-    const bufferKey = `chat:${chatId}`;
+    const bufferKey = `chat:telegram:${chatId}`;
     this.ensureStreamingBuffer(chatId, sessionId);
 
     if (!sender) {
@@ -1536,10 +1463,69 @@ export class TelegramHandler {
       const directory = sessionData?.resolvedDirectory;
 
       // 异步触发 OpenCode 请求
-      const variant = promptEffort || config?.preferredEffort;
+      let variant = promptEffort || config?.preferredEffort;
+
+      // 验证 variant 是否与当前模型兼容
+      if (variant && providerId && modelId) {
+        try {
+          const providersPayload = await opencodeClient.getProviders();
+          const providers = Array.isArray(providersPayload.providers) ? providersPayload.providers : [];
+          const providerLower = providerId.toLowerCase();
+          const modelLower = modelId.toLowerCase();
+
+          for (const provider of providers) {
+            if (!provider || typeof provider !== 'object') continue;
+            const providerRecord = provider as Record<string, unknown>;
+            const providerIdRaw = typeof providerRecord.id === 'string' ? providerRecord.id.trim() : '';
+            if (!providerIdRaw || providerIdRaw.toLowerCase() !== providerLower) continue;
+
+            const modelsRaw = providerRecord.models;
+            const modelList = Array.isArray(modelsRaw)
+              ? modelsRaw
+              : (modelsRaw && typeof modelsRaw === 'object' ? Object.values(modelsRaw) : []);
+
+            for (const modelItem of modelList) {
+              if (!modelItem || typeof modelItem !== 'object') continue;
+              const modelRecord = modelItem as Record<string, unknown>;
+              const modelIdRaw = typeof modelRecord.id === 'string'
+                ? modelRecord.id.trim()
+                : (typeof modelRecord.modelID === 'string' ? modelRecord.modelID.trim() : '');
+              if (!modelIdRaw || modelIdRaw.toLowerCase() !== modelLower) continue;
+
+              // 解析模型支持的 variants
+              const variants = modelRecord.variants;
+              if (variants && typeof variants === 'object' && !Array.isArray(variants)) {
+                const supportedVariants: EffortLevel[] = [];
+                for (const key of Object.keys(variants as Record<string, unknown>)) {
+                  const normalized = normalizeEffortLevel(key);
+                  if (normalized && normalized !== 'none' && !supportedVariants.includes(normalized)) {
+                    supportedVariants.push(normalized);
+                  }
+                }
+                // 如果当前 variant 不在支持列表中，清除它
+                if (supportedVariants.length > 0 && !supportedVariants.includes(variant)) {
+                  variant = undefined;
+                }
+              }
+              break;
+            }
+            break;
+          }
+        } catch (error) {
+          console.debug('[Telegram] 获取模型支持的 variants 失败，跳过验证:', error instanceof Error ? error.message : String(error));
+        }
+      }
+
+      // ── 非多模态主模型图片回退 ──
+      const dispatchParts = await preprocessVisionParts(
+        parts as VisionPart[],
+        { providerId, modelId, directory },
+        'Telegram',
+      ) as OpencodePartInput[];
+
       await opencodeClient.sendMessagePartsAsync(
         sessionId,
-        parts,
+        dispatchParts,
         {
           providerId,
           modelId,

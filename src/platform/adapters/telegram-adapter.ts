@@ -6,7 +6,10 @@
  * 支持附件下载：photo、document、video、audio
  */
 
-import type { Bot, InlineKeyboard, Context } from 'grammy';
+import type { File as TelegramFile } from '@grammyjs/types';
+import type { Bot, Context, InlineKeyboard } from 'grammy';
+import { telegramConfig } from '../../config.js';
+
 import type {
   PlatformAdapter,
   PlatformSender,
@@ -14,38 +17,15 @@ import type {
   PlatformActionEvent,
   PlatformAttachment,
 } from '../types.js';
-import { telegramConfig } from '../../config.js';
-import type { File as TelegramFile } from '@grammyjs/types';
 
-// 动态导入缓存：仅在启用时加载 grammy
-type GrammyModule = typeof import('grammy');
-let _grammyModule: GrammyModule | null = null;
-async function getGrammyModule(): Promise<GrammyModule> {
-  if (!_grammyModule) {
-    _grammyModule = await import('grammy');
-  }
-  return _grammyModule;
-}
-
-const TELEGRAM_MESSAGE_LIMIT = 4096;
-const TELEGRAM_FILE_BASE_URL = 'https://api.telegram.org/file/bot';
-
-/**
- * Telegram 卡片载荷类型
- */
-type TelegramCardPayload = {
-  telegramText?: string;
-  text?: string;
-  markdown?: string;
-  buttons?: Array<{
-    text: string;
-    callback_data: string;
-  }>;
-};
-
-/**
- * Telegram 平台发送器实现
- */
+import {
+  TELEGRAM_MESSAGE_LIMIT,
+  TELEGRAM_FILE_BASE_URL,
+  type TelegramCardPayload,
+} from './telegram-adapter-types.js';
+import {
+  getGrammyModule,
+} from './telegram-adapter-utils.js';
 class TelegramSender implements PlatformSender {
   constructor(private readonly adapter: TelegramAdapter) {}
 
@@ -290,6 +270,8 @@ export class TelegramAdapter implements PlatformAdapter {
       this.bot.stop();
       this.bot = null;
       this.isActive = false;
+      this.messageCallbacks.length = 0;
+      this.actionCallbacks.length = 0;
       this.messageConversationMap.clear();
       console.log('[Telegram] 适配器已停止');
     }

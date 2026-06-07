@@ -7,7 +7,7 @@
  * 用法: node scripts/setup-mirror.mjs
  */
 
-import { writeFileSync, existsSync, appendFileSync } from 'fs';
+import { writeFileSync, existsSync, appendFileSync, readFileSync } from 'fs';
 import { execSync } from 'child_process';
 
 // 镜像源配置 (主1备2兜底1)
@@ -88,17 +88,7 @@ function generateNpmrc(selected) {
     `# 生成时间: ${new Date().toISOString()}`,
     '',
     '# npm registry',
-    `registry=${selected.registry.url}`,
-    '',
-    '# sharp 二进制镜像',
-    `sharp_binary_host=${selected.sharp.url}`,
-    `sharp_libvips_binary_host=${selected.sharpLibvips.url}`,
-    '',
-    '# better-sqlite3 二进制镜像',
-    `better_sqlite3_binary_host=${selected.betterSqlite3.url}`,
-    '',
-    '# puppeteer chromium 镜像',
-    `puppeteer_download_host=${selected.puppeteer.url}`
+    `registry=${selected.registry.url}`
   ];
 
   return lines.join('\n');
@@ -147,7 +137,7 @@ async function main() {
   const npmrcPath = '.npmrc';
   if (existsSync(npmrcPath)) {
     // 读取现有配置，移除自动生成的部分
-    const existing = require('fs').readFileSync(npmrcPath, 'utf-8');
+    const existing = readFileSync(npmrcPath, 'utf-8');
     const lines = existing.split('\n').filter(line =>
       !line.includes('# 自动生成的镜像配置') &&
       !line.includes('# 生成时间:') &&
@@ -155,7 +145,8 @@ async function main() {
       !line.includes('sharp_binary_host=') &&
       !line.includes('sharp_libvips_binary_host=') &&
       !line.includes('better_sqlite3_binary_host=') &&
-      !line.includes('puppeteer_download_host=')
+      !line.includes('puppeteer_download_host=') &&
+      !line.includes('node-linker=')
     );
 
     const customConfig = lines.join('\n').trim();
