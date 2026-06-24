@@ -198,16 +198,9 @@ export async function main(
     // 已迁移到 process-manager 管理，此处保留钩子供将来扩展
   };
 
-  // 监听主进程退出事件
   process.on('exit', cleanupChildProcess);
-  process.on('SIGINT', () => {
-    cleanupChildProcess();
-    process.exit(0);
-  });
-  process.on('SIGTERM', () => {
-    cleanupChildProcess();
-    process.exit(0);
-  });
+  // SIGINT/SIGTERM 由下方 gracefulShutdown 统一处理，不在此重复注册
+  // （重复注册会导致 process.exit(0) 跳过异步清理）
 
   // 3. 验证配置
   try {
