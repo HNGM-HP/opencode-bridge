@@ -81,7 +81,7 @@ export async function checkOpenCodeSingleInstance(
     ? await options.processListProvider()
     : await listOpenCodeProcesses(processKeywords);
 
-  const keywordMatched = processList.filter(item => matchesProcessKeywords(item, processKeywords));
+  const keywordMatched = processList.filter(item => matchesServeProcess(item, processKeywords));
   const runningPidSet = new Set<number>(keywordMatched.map(item => item.pid));
 
   if (pidFromFile !== null && pidAlive) {
@@ -287,30 +287,18 @@ async function listOpenCodeProcesses(processKeywords: string[]): Promise<OpenCod
   return snapshot.filter(item => matchesServeProcess(item, processKeywords));
 }
 
-/**
- * 匹配 `opencode serve` 进程，排除交互式 opencode / opencode debug 等
- *
- * 策略：
- * - 命令行含 `serve` 关键字 → 匹配（精确识别 serve 进程）
- * - 命令行不含 `serve` 但也无其他子命令（纯 `opencode`）→ 不匹配（交互式）
- * - 命令行信息不可用（Windows tasklist 只有进程名）→ 保守匹配（保持原行为）
- */
 function matchesServeProcess(item: OpenCodeProcessInfo, processKeywords: string[]): boolean {
   const command = item.command.toLowerCase();
   const hasKeyword = processKeywords.some(keyword => command.includes(keyword.toLowerCase()));
   if (!hasKeyword) {
     return false;
   }
-  // 命令行含 serve → 精确匹配 serve 进程
   if (/\bserve\b/.test(command)) {
     return true;
   }
-  // 命令行信息不足（只有进程名如 "opencode.exe"，无参数）→ 保守匹配
-  // 这种情况通常出现在 Windows tasklist fallback，无法区分 serve 和交互式
-  if (!command.includes(' ')) {
+  if (process.platform === 'win32' && !command.includes(' ')) {
     return true;
   }
-  // 命令行有参数但不含 serve → 交互式或其他子命令，排除
   return false;
 }
 
