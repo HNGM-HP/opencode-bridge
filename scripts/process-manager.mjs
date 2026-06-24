@@ -13,6 +13,7 @@
  */
 
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -536,7 +537,32 @@ function main() {
  * 返回 { type: 'node-script', nodeExe, script } 或 { type: 'shell', cmd: 'opencode' }
  */
 function resolveOpenCodeExecutable() {
+  // 优先读 OPENCODE_AUTO_START_CMD（用户自定义绝对路径）
+  const customCmd = process.env.OPENCODE_AUTO_START_CMD?.trim();
+  if (customCmd) {
+    const parts = customCmd.split(/\s+/);
+    const exePath = parts[0];
+    const restArgs = parts.slice(1);
+    if (fs.existsSync(exePath)) {
+      return { type: 'direct', exe: exePath, extraArgs: restArgs };
+    }
+    return { type: 'shell', cmd: customCmd };
+  }
+
   if (!isWindows()) {
+    // Linux/macOS: 检查常见安装路径
+    const homeDir = os.homedir();
+    const candidates = [
+      path.join(homeDir, '.opencode', 'bin', 'opencode'),       // 官方脚本安装
+      path.join(homeDir, '.local', 'bin', 'opencode'),           // npm i -g (用户级 prefix)
+      '/usr/local/bin/opencode',                                  // npm i -g (root)
+      '/usr/bin/opencode',                                        // 包管理器安装
+    ];
+    for (const candidate of candidates) {
+      if (fs.existsSync(candidate)) {
+        return { type: 'direct', exe: candidate };
+      }
+    }
     return { type: 'shell', cmd: 'opencode' };
   }
 
@@ -727,7 +753,7 @@ function startOpenCodeServe(options = {}) {
       fs.closeSync(stdoutFd);
       fs.closeSync(stderrFd);
     } else if (exe.type === 'direct') {
-      const directArgs = ['serve'];
+      const directArgs = [...(exe.extraArgs || []), 'serve'];
       if (servePort !== null) directArgs.push('--port', String(servePort));
       child = spawn(exe.exe, directArgs, {
         detached: true,

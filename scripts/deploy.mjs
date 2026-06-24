@@ -1136,6 +1136,15 @@ function getServiceRunUser() {
 
 function buildServiceContent() {
   const serviceUser = getServiceRunUser();
+  // 构建 PATH：用户 bin 目录 + systemd 默认目录，确保 systemd 环境能找到 opencode/node
+  const userHome = resolveHomeDirForUser(serviceUser);
+  const pathDirs = [
+    path.join(userHome, '.local', 'bin'),
+    path.join(userHome, '.opencode', 'bin'),
+    '/usr/local/bin',
+    '/usr/bin',
+    '/bin',
+  ];
   return [
     '[Unit]',
     'Description=Feishu OpenCode Bridge',
@@ -1145,10 +1154,12 @@ function buildServiceContent() {
     'Type=simple',
     `User=${serviceUser}`,
     `WorkingDirectory=${rootDir}`,
-    `ExecStart=${process.execPath} dist/index.js`,
+    `ExecStart=${process.execPath} dist/admin/index.js`,
     'Restart=always',
     'RestartSec=3',
     `EnvironmentFile=-${envPath}`,
+    `Environment=PATH=${pathDirs.join(':')}`,
+    `Environment=HOME=${userHome}`,
     `StandardOutput=append:${outLog}`,
     `StandardError=append:${errLog}`,
     '',
@@ -1167,13 +1178,30 @@ async function installSystemdService() {
     console.log(`[deploy] 检测到 sudo 环境，将以 ${sudoUser} 身份执行部署...`);
     const sudoUserHome = resolveHomeDirForUser(sudoUser);
 
+    // 构建普通用户的 PATH（sudo secure_path 会覆盖，需显式恢复）
+    const userPathDirs = [
+      path.join(sudoUserHome, '.local', 'bin'),
+      path.join(sudoUserHome, '.opencode', 'bin'),
+      '/usr/local/bin',
+      '/usr/bin',
+      '/bin',
+    ];
+    const userPath = userPathDirs.join(':');
+
     // 以普通用户身份执行部署
-    const deployResult = spawnSync('sudo', ['-u', sudoUser, 'node', path.join(scriptDir, 'deploy.mjs'), 'deploy'], {
+    // 用 env 命令显式注入 PATH，绕过 sudo secure_path 覆盖
+    // 用绝对路径的 node，避免 PATH 里仍找不到
+    const deployResult = spawnSync('sudo', [
+      '-u', sudoUser,
+      'env', `PATH=${userPath}`, `HOME=${sudoUserHome}`,
+      process.execPath, path.join(scriptDir, 'deploy.mjs'), 'deploy',
+    ], {
       cwd: rootDir,
       stdio: 'inherit',
       env: {
         ...process.env,
         HOME: sudoUserHome,
+        PATH: userPath,
         BRIDGE_SKIP_SUDO_WARNING: '1',
       },
     });
