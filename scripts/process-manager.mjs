@@ -535,7 +535,7 @@ function main() {
       if (alivePid !== null) {
         console.log(`[process-manager] opencode serve 运行中 (PID: ${alivePid})`);
       } else {
-        const scanPids = findOpenCodeProcesses();
+        const scanPids = findOpenCodeProcesses(false, null, true);
         if (scanPids.length > 0) {
           console.log(`[process-manager] opencode serve 运行中（扫描到 PID: ${scanPids.join(', ')}，但 PID 文件缺失）`);
         } else {
