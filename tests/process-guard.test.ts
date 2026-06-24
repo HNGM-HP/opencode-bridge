@@ -68,7 +68,7 @@ describe('process-guard', () => {
       port: 4096,
       processAliveChecker: async pid => pid === 303,
       processListProvider: async (): Promise<OpenCodeProcessInfo[]> => [
-        { pid: 303, command: '/home/user/.opencode/bin/opencode serve --port 4096' },
+        { pid: 303, command: '/home/testuser/.opencode/bin/opencode serve --port 4096' },
         { pid: 404, command: 'opencode' },
         { pid: 505, command: 'opencode debug skill --print-logs' },
       ],
