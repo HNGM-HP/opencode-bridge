@@ -848,7 +848,13 @@ async function deployProject(options = {}) {
   }
 
   try {
-    run('npm', ['install', '--include=dev'], '安装后端依赖');
+    run('npm', ['install', '--include=dev'], '安装后端依赖', { timeout: 1800000 });
+  } catch (error) {
+    console.error('[deploy] npm install 失败，常见原因：');
+    console.error('[deploy]   1. 网络不稳定导致 electron/puppeteer 二进制下载卡死');
+    console.error('[deploy]   2. GitHub 在当前网络下不可达');
+    console.error('[deploy] 可尝试：配置代理后重试，或手动执行 npm install --ignore-scripts 后单独安装二进制');
+    throw error;
   } finally {
     if (puppeteerHostSet) {
       delete process.env.PUPPETEER_DOWNLOAD_HOST;
