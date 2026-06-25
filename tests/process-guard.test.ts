@@ -58,6 +58,47 @@ describe('process-guard', () => {
     expect(result.conflictPids).toEqual([202]);
   });
 
+  it('交互式 opencode 与 serve 共存时不应误报 single-instance-violation', async () => {
+    const pidFilePath = path.join(tempDir, 'bridge.pid');
+    await fs.writeFile(pidFilePath, '303', 'utf-8');
+
+    const result = await checkOpenCodeSingleInstance({
+      pidFilePath,
+      host: '127.0.0.1',
+      port: 4096,
+      processAliveChecker: async pid => pid === 303,
+      processListProvider: async (): Promise<OpenCodeProcessInfo[]> => [
+        { pid: 303, command: '/home/testuser/.opencode/bin/opencode serve --port 4096' },
+        { pid: 404, command: 'opencode' },
+        { pid: 505, command: 'opencode debug skill --print-logs' },
+      ],
+      portProbe: async () => ({ isOpen: true, reason: 'connected' }),
+    });
+
+    expect(result.status).toBe('ok');
+    expect(result.runningPids).toEqual([303]);
+    expect(result.conflictPids).toEqual([]);
+  });
+
+  it('仅有交互式 opencode（无 serve）时应返回 not-running', async () => {
+    const pidFilePath = path.join(tempDir, 'bridge.pid');
+
+    const result = await checkOpenCodeSingleInstance({
+      pidFilePath,
+      host: '127.0.0.1',
+      port: 4096,
+      processAliveChecker: async () => false,
+      processListProvider: async (): Promise<OpenCodeProcessInfo[]> => [
+        { pid: 606, command: 'opencode' },
+        { pid: 707, command: 'opencode debug skill' },
+      ],
+      portProbe: async () => ({ isOpen: false, reason: 'ECONNREFUSED' }),
+    });
+
+    expect(result.status).toBe('not-running');
+    expect(result.runningPids).toEqual([]);
+  });
+
   it('并发触发救援锁时第二个请求应返回 lock-busy', async () => {
     const lockTargetPath = path.join(tempDir, 'rescue-mutex');
 

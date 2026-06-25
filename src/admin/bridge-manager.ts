@@ -62,6 +62,9 @@ export class BridgeManager {
     try {
       console.log('[BridgeManager] 内嵌模式启动 Bridge...');
 
+      // 标记为由 Admin 启动，防止 main() 重复创建 Admin Server
+      process.env.BRIDGE_SPAWNED_BY_ADMIN = '1';
+
       // 动态导入 Bridge 模块
       const { startBridge } = await import('../index.js');
 

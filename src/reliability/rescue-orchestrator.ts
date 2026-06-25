@@ -8,6 +8,7 @@ import { spawn } from 'node:child_process';
 import { opencodeConfig, reliabilityConfig } from '../config.js';
 import { probeOpenCodeHealth } from './opencode-probe.js';
 import { decideRescuePolicy } from './rescue-policy.js';
+import { resolveOpencodeExecutable } from '../utils/resolve-opencode.js';
 import { executeRescuePipeline } from './rescue-executor.js';
 import { reportRecoveryContext } from './recovery-reporter.js';
 import { FailureType, RescueState } from './types.js';
@@ -102,7 +103,8 @@ export const createRescueOrchestrator = (
           return new Promise((resolve, reject) => {
             try {
               const isWindows = process.platform === 'win32';
-              const child = spawn('opencode', [], {
+              const { exe, args: exeArgs } = resolveOpencodeExecutable();
+              const child = spawn(exe, [...exeArgs, 'serve'], {
                 detached: true,
                 stdio: 'ignore',
                 shell: isWindows,

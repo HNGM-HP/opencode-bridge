@@ -2,6 +2,7 @@ import { VERSION } from '../utils/version.js';
 import { initLogger } from '../utils/logger.js';
 import { logStore } from '../store/log-store.js';
 import { createAdminServer } from '../admin/admin-server.js';
+import { bridgeManager } from '../admin/bridge-manager.js';
 import { feishuClient } from '../feishu/client.js';
 import { loadAllConfigured, getSenderByPlatform, getCachedAdapter, getConfiguredPlatforms, clearCache } from '../platform/loader.js';
 import { opencodeClient, type PermissionRequestEvent } from '../opencode/client.js';
@@ -198,16 +199,9 @@ export async function main(
     // 已迁移到 process-manager 管理，此处保留钩子供将来扩展
   };
 
-  // 监听主进程退出事件
   process.on('exit', cleanupChildProcess);
-  process.on('SIGINT', () => {
-    cleanupChildProcess();
-    process.exit(0);
-  });
-  process.on('SIGTERM', () => {
-    cleanupChildProcess();
-    process.exit(0);
-  });
+  // SIGINT/SIGTERM 由下方 gracefulShutdown 统一处理，不在此重复注册
+  // （重复注册会导致 process.exit(0) 跳过异步清理）
 
   // 3. 验证配置
   try {
@@ -241,9 +235,10 @@ export async function main(
     const adminPort = parseInt(process.env.ADMIN_PORT ?? _cs.get().ADMIN_PORT ?? '4098', 10);
     const adminServer = createAdminServer({
       port: adminPort,
-      cronManager: undefined, // cronManager 在后面初始化
+      cronManager: undefined,
       startedAt: new Date(),
       version: VERSION,
+      bridgeManager,
     });
     adminServer.start();
     console.log(`[Admin] 管理面板已启动: http://localhost:${adminPort}`);

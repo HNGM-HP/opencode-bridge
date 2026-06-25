@@ -81,7 +81,7 @@ export async function checkOpenCodeSingleInstance(
     ? await options.processListProvider()
     : await listOpenCodeProcesses(processKeywords);
 
-  const keywordMatched = processList.filter(item => matchesProcessKeywords(item, processKeywords));
+  const keywordMatched = processList.filter(item => matchesServeProcess(item, processKeywords));
   const runningPidSet = new Set<number>(keywordMatched.map(item => item.pid));
 
   if (pidFromFile !== null && pidAlive) {
@@ -284,7 +284,22 @@ export async function probeTcpPort(
 
 async function listOpenCodeProcesses(processKeywords: string[]): Promise<OpenCodeProcessInfo[]> {
   const snapshot = await listAllProcesses();
-  return snapshot.filter(item => matchesProcessKeywords(item, processKeywords));
+  return snapshot.filter(item => matchesServeProcess(item, processKeywords));
+}
+
+function matchesServeProcess(item: OpenCodeProcessInfo, processKeywords: string[]): boolean {
+  const command = item.command.toLowerCase();
+  const hasKeyword = processKeywords.some(keyword => command.includes(keyword.toLowerCase()));
+  if (!hasKeyword) {
+    return false;
+  }
+  if (/\bserve\b/.test(command)) {
+    return true;
+  }
+  if (process.platform === 'win32' && !command.includes(' ')) {
+    return true;
+  }
+  return false;
 }
 
 function matchesProcessKeywords(item: OpenCodeProcessInfo, processKeywords: string[]): boolean {
