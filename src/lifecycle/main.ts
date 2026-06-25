@@ -2,6 +2,7 @@ import { VERSION } from '../utils/version.js';
 import { initLogger } from '../utils/logger.js';
 import { logStore } from '../store/log-store.js';
 import { createAdminServer } from '../admin/admin-server.js';
+import { bridgeManager } from '../admin/bridge-manager.js';
 import { feishuClient } from '../feishu/client.js';
 import { loadAllConfigured, getSenderByPlatform, getCachedAdapter, getConfiguredPlatforms, clearCache } from '../platform/loader.js';
 import { opencodeClient, type PermissionRequestEvent } from '../opencode/client.js';
@@ -234,9 +235,10 @@ export async function main(
     const adminPort = parseInt(process.env.ADMIN_PORT ?? _cs.get().ADMIN_PORT ?? '4098', 10);
     const adminServer = createAdminServer({
       port: adminPort,
-      cronManager: undefined, // cronManager 在后面初始化
+      cronManager: undefined,
       startedAt: new Date(),
       version: VERSION,
+      bridgeManager,
     });
     adminServer.start();
     console.log(`[Admin] 管理面板已启动: http://localhost:${adminPort}`);

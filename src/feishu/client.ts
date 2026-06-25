@@ -30,6 +30,7 @@ class FeishuClient extends EventEmitter {
   private eventDispatcher: lark.EventDispatcher;
   private cardActionHandler?: (event: FeishuCardActionEvent) => Promise<FeishuCardActionResponse | void>;
   private cardUpdateQueue: Map<string, Promise<boolean>> = new Map();
+  private processedMessageIds: Set<string> = new Set();
 
   // 连接状态和心跳检测
   private connectionState: ConnectionState = 'disconnected';
@@ -156,7 +157,8 @@ class FeishuClient extends EventEmitter {
     console.log('[飞书] 正在启动长连接...');
     this.connectionState = 'connecting';
 
-    // 注册消息接收事件
+    this.eventDispatcher = this.createEventDispatcher();
+
     this.eventDispatcher.register({
       'im.message.receive_v1': (data) => {
         this.handleMessage(data as FeishuEventData);
@@ -238,9 +240,20 @@ class FeishuClient extends EventEmitter {
       const message = data.message;
       const sender = data.sender;
 
-      // 忽略机器人自己发的消息
       if (sender.sender_type === 'bot') {
         return;
+      }
+
+      const msgId = message.message_id;
+      if (msgId) {
+        if (this.processedMessageIds.has(msgId)) {
+          return;
+        }
+        this.processedMessageIds.add(msgId);
+        if (this.processedMessageIds.size > 500) {
+          const first = this.processedMessageIds.values().next().value;
+          if (first) this.processedMessageIds.delete(first);
+        }
       }
 
       const msgType = message.message_type;
