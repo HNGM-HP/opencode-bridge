@@ -1,3 +1,5 @@
+# 本人精力有限，暂停维护，有需要的可以自行克隆修改。
+
 # OpenCode Bridge
 
 [![v3.1.6](https://img.shields.io/badge/v3.1.6-760031c)](https://github.com/HNGM-HP/opencode-bridge/blob/main)
