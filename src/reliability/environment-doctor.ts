@@ -1,10 +1,12 @@
 import fs from 'node:fs/promises';
+import fsSync from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { resolveOpencodeExecutable } from '../utils/resolve-opencode.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -216,11 +218,21 @@ async function hasCommandInPath(command: string): Promise<boolean> {
       timeout: 1200,
       maxBuffer: 1024 * 1024,
     });
-    return (result.stdout || '').trim().length > 0;
+    if ((result.stdout || '').trim().length > 0) {
+      return true;
+    }
   } catch (error) {
     console.error('[EnvironmentDoctor] command probe failed:', error instanceof Error ? error.message : String(error));
-    return false;
   }
+  // which/where 失败时（如 systemd 环境 PATH 不全），检查常见安装路径
+  if (command === 'opencode') {
+    const { exe } = resolveOpencodeExecutable();
+    if (exe !== 'opencode') {
+      // 找到了绝对路径，说明已安装只是不在当前 PATH 里
+      return true;
+    }
+  }
+  return false;
 }
 
 function getInstallHint(command: string, runtimeOs: EnvironmentOs): string {

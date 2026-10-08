@@ -5,6 +5,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { opencodeConfig, reliabilityConfig } from '../config.js';
 import { probeOpenCodeHealth } from './opencode-probe.js';
 import { checkOpenCodeSingleInstance, type ProcessGuardResult } from './process-guard.js';
+import { resolveOpencodeExecutable } from '../utils/resolve-opencode.js';
 
 type ProbeHealthFn = (options: { host: string; port: number }) => Promise<{ ok: boolean }>;
 type CheckSingleInstanceFn = (options: {
@@ -198,7 +199,9 @@ async function defaultStartProcess(pidFilePath = './logs/opencode.pid'): Promise
         // 避免 Node 的 CREATE_NO_WINDOW 导致孙进程 opencode-windows-x64\bin\opencode.exe 弹黑窗。
         pid = startOpencodeWindowsHidden();
       } else {
-        const child = spawn('opencode', ['serve'], {
+        // Linux/macOS: 用路径查找，避免 systemd 等环境 PATH 找不到 opencode
+        const { exe, args: exeArgs } = resolveOpencodeExecutable();
+        const child = spawn(exe, [...exeArgs, 'serve'], {
           detached: true,
           stdio: 'ignore',
         });

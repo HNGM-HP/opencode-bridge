@@ -13,6 +13,7 @@
  */
 
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -112,7 +113,7 @@ function findBridgeProcesses(excludeSelf = false, excludePid = null) {
  * @param {number} excludePid - 要排除的指定 PID
  * @returns {number[]} 进程 PID 列表
  */
-function findOpenCodeProcesses(excludeSelf = false, excludePid = null) {
+function findOpenCodeProcesses(excludeSelf = false, excludePid = null, serveOnly = false) {
   const pids = [];
   const currentPid = process.pid;
 
@@ -137,7 +138,11 @@ function findOpenCodeProcesses(excludeSelf = false, excludePid = null) {
           }
           // opencode.exe 直接就是目标进程
           if (match[1] === 'opencode.exe') {
-            pids.push(pid);
+            // Windows 下 tasklist 不含命令行参数，serveOnly 无法精确判断
+            // 保守起见：serveOnly 时不通过 tasklist 匹配，改由 PID 文件判断
+            if (!serveOnly) {
+              pids.push(pid);
+            }
           } else if (isOpenCodeProcessByCommand(pid)) {
             pids.push(pid);
           }
@@ -162,7 +167,11 @@ function findOpenCodeProcesses(excludeSelf = false, excludePid = null) {
         const command = parts.slice(10).join(' ');
 
         // 匹配 OpenCode 进程
-        if (isOpenCodeCommand(command)) {
+        if (serveOnly) {
+          if (isOpencodeServeCommand(command)) {
+            pids.push(pid);
+          }
+        } else if (isOpenCodeCommand(command)) {
           pids.push(pid);
         }
       }
@@ -198,6 +207,22 @@ function isOpenCodeCommand(command) {
   }
   // 精确匹配 opencode 命令，避免项目名干扰
   return /\bopencode\b/.test(normalizedCmd) || normalizedCmd.includes('opencode-cli');
+}
+
+/**
+ * 精确匹配 `opencode serve` 进程（用于 serve 幂等检查）
+ * 排除交互式 opencode、opencode debug、opencode attach 等非 serve 命令
+ */
+function isOpencodeServeCommand(command) {
+  const normalizedCmd = command.replace(/\\/g, '/');
+  if (isBridgeCommand(normalizedCmd)) {
+    return false;
+  }
+  if (normalizedCmd.includes('opencode-bridge')) {
+    return false;
+  }
+  // 匹配 opencode serve（允许前面有路径，后面有 --port 等参数）
+  return /\bopencode\b\s+serve\b/.test(normalizedCmd);
 }
 
 function getProcessCommandLine(pid) {
@@ -510,7 +535,7 @@ function main() {
       if (alivePid !== null) {
         console.log(`[process-manager] opencode serve 运行中 (PID: ${alivePid})`);
       } else {
-        const scanPids = findOpenCodeProcesses();
+        const scanPids = findOpenCodeProcesses(false, null, true);
         if (scanPids.length > 0) {
           console.log(`[process-manager] opencode serve 运行中（扫描到 PID: ${scanPids.join(', ')}，但 PID 文件缺失）`);
         } else {
@@ -536,7 +561,32 @@ function main() {
  * 返回 { type: 'node-script', nodeExe, script } 或 { type: 'shell', cmd: 'opencode' }
  */
 function resolveOpenCodeExecutable() {
+  // 优先读 OPENCODE_AUTO_START_CMD（用户自定义绝对路径）
+  const customCmd = process.env.OPENCODE_AUTO_START_CMD?.trim();
+  if (customCmd) {
+    const parts = customCmd.split(/\s+/);
+    const exePath = parts[0];
+    const restArgs = parts.slice(1);
+    if (fs.existsSync(exePath)) {
+      return { type: 'direct', exe: exePath, extraArgs: restArgs };
+    }
+    return { type: 'shell', cmd: customCmd };
+  }
+
   if (!isWindows()) {
+    // Linux/macOS: 检查常见安装路径
+    const homeDir = os.homedir();
+    const candidates = [
+      path.join(homeDir, '.opencode', 'bin', 'opencode'),       // 官方脚本安装
+      path.join(homeDir, '.local', 'bin', 'opencode'),           // npm i -g (用户级 prefix)
+      '/usr/local/bin/opencode',                                  // npm i -g (root)
+      '/usr/bin/opencode',                                        // 包管理器安装
+    ];
+    for (const candidate of candidates) {
+      if (fs.existsSync(candidate)) {
+        return { type: 'direct', exe: candidate };
+      }
+    }
     return { type: 'shell', cmd: 'opencode' };
   }
 
@@ -667,7 +717,8 @@ function startOpenCodeServe(options = {}) {
   }
 
   // 也通过进程扫描检查（防止 PID 文件丢失但进程还在的情况）
-  const scanPids = findOpenCodeProcesses();
+  // 仅匹配 `opencode serve` 进程，排除交互式 opencode 避免误判
+  const scanPids = findOpenCodeProcesses(false, null, true);
   if (scanPids.length > 0) {
     // 补写 PID 文件
     try {
@@ -727,7 +778,7 @@ function startOpenCodeServe(options = {}) {
       fs.closeSync(stdoutFd);
       fs.closeSync(stderrFd);
     } else if (exe.type === 'direct') {
-      const directArgs = ['serve'];
+      const directArgs = [...(exe.extraArgs || []), 'serve'];
       if (servePort !== null) directArgs.push('--port', String(servePort));
       child = spawn(exe.exe, directArgs, {
         detached: true,
