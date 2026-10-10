@@ -25,6 +25,9 @@ export class P2PHandler {
   private createChatDirectoryInputMap: Map<string, { value: string; expiresAt: number }> = new Map();
   private createChatNameInputMap: Map<string, { value: string; expiresAt: number }> = new Map();
 
+  // per-chatId 互斥锁，防 ensurePrivateSession TOCTOU 竞态
+  private _ensureSessionLocks = new Map<string, Promise<EnsurePrivateSessionResult | null>>();
+
   private async safeReply(
     messageId: string | undefined,
     chatId: string | undefined,
@@ -470,6 +473,23 @@ export class P2PHandler {
   }
 
   private async ensurePrivateSession(chatId: string, senderId: string): Promise<EnsurePrivateSessionResult | null> {
+    // per-chatId 互斥锁：等第一个完成，防止并发的 handleMessage 都走到创建 session
+    const pending = this._ensureSessionLocks.get(chatId);
+    if (pending) {
+      return await pending;
+    }
+    const promise = this._ensurePrivateSessionImpl(chatId, senderId);
+    this._ensureSessionLocks.set(chatId, promise);
+    try {
+      return await promise;
+    } finally {
+      if (this._ensureSessionLocks.get(chatId) === promise) {
+        this._ensureSessionLocks.delete(chatId);
+      }
+    }
+  }
+
+  private async _ensurePrivateSessionImpl(chatId: string, senderId: string): Promise<EnsurePrivateSessionResult | null> {
     const current = chatSessionStore.getSession(chatId);
     if (current?.sessionId) {
       const missing = await this.isSessionMissingInOpenCode(current.sessionId);

@@ -42,6 +42,10 @@ class FeishuClient extends EventEmitter {
   // 机器人自身信息
   private botOpenId: string | null = null;
 
+  // message_id 去重缓存：WebSocket 可能重复投递同一条消息
+  private _recentMessageIds = new Map<string, number>();
+  private readonly _RECENT_MESSAGE_TTL_MS = 30000;
+
   constructor() {
     super();
     this.client = new lark.Client({
@@ -153,6 +157,10 @@ class FeishuClient extends EventEmitter {
 
   // 启动长连接
   async start(): Promise<void> {
+    if (this.connectionState === 'connected' || this.connectionState === 'connecting') {
+      console.log('[飞书] 长连接已连接/连接中，忽略重复调用');
+      return;
+    }
     console.log('[飞书] 正在启动长连接...');
     this.connectionState = 'connecting';
 
@@ -241,6 +249,26 @@ class FeishuClient extends EventEmitter {
       // 忽略机器人自己发的消息
       if (sender.sender_type === 'bot') {
         return;
+      }
+
+      // 消息去重：飞书 WebSocket 可能重复投递同一条消息
+      const msgId = message.message_id;
+      if (msgId) {
+        const now = Date.now();
+        const recent = this._recentMessageIds.get(msgId);
+        if (recent !== undefined && now - recent < this._RECENT_MESSAGE_TTL_MS) {
+          console.log(`[飞书] 忽略重复消息: messageId=${msgId.slice(0, 16)}...`);
+          return;
+        }
+        this._recentMessageIds.set(msgId, now);
+        // 惰性清理：每收到 500 条消息后扫一遍过期记录
+        if (this._recentMessageIds.size >= 500) {
+          for (const [id, ts] of this._recentMessageIds) {
+            if (now - ts >= this._RECENT_MESSAGE_TTL_MS) {
+              this._recentMessageIds.delete(id);
+            }
+          }
+        }
       }
 
       const msgType = message.message_type;
