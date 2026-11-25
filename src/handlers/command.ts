@@ -1298,10 +1298,15 @@ export class CommandHandler {
     try {
        // 注意：这里使用 listSessionsAcrossProjects 从已知目录获取会话
       const sessions = await opencodeClient.listSessionsAcrossProjects();
+      const openCodeProjects = await opencodeClient.listProjects().catch(error => {
+        console.warn('[Command] 获取项目列表失败:', error);
+        return [];
+      });
       const sessionDirs = sessions
         .map((session: any) => session.directory)
         .filter((directory: string): directory is string => Boolean(directory));
-      const uniqueDirs = new Set([...knownDirs, ...sessionDirs]);
+      const projectDirs = openCodeProjects.flatMap(project => [project.worktree, ...(project.sandboxes ?? [])]);
+      const uniqueDirs = new Set([...knownDirs, ...projectDirs, ...sessionDirs]);
       knownDirs = Array.from(uniqueDirs);
     } catch (error) {
       console.warn('[Command] 获取会话列表失败:', error);

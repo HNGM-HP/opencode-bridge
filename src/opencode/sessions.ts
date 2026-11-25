@@ -1,6 +1,6 @@
 import type { OpencodeClient as SdkOpencodeClient } from '@opencode-ai/sdk';
-import type { Session, Project, Message, Part } from '@opencode-ai/sdk';
-import type { SessionQueryOptions } from './client.js';
+import type { Session, Message, Part } from '@opencode-ai/sdk';
+import type { OpencodeProject, SessionQueryOptions } from './client.js';
 import { formatSdkError, appendAuthHint } from './client-helpers.js';
 
 export interface SessionsDeps {
@@ -24,7 +24,7 @@ export class SessionsManager {
   }
 
   // 获取工作区列表
-  async listProjects(options?: SessionQueryOptions): Promise<Project[]> {
+  async listProjects(options?: SessionQueryOptions): Promise<OpencodeProject[]> {
     const client = this.getClient();
     const directory = this.deps.normalizeDirectory(options?.directory);
     const result = await client.project.list(
@@ -78,6 +78,9 @@ export class SessionsManager {
       const projects = await this.listProjects();
       const seenDirectories = new Set<string>();
       for (const project of projects) {
+        for (const sandbox of project.sandboxes ?? []) {
+          this.deps.rememberDirectory(sandbox);
+        }
         const normalized = this.deps.rememberDirectory(project.worktree);
         if (!normalized || seenDirectories.has(normalized)) {
           continue;
@@ -196,6 +199,9 @@ export class SessionsManager {
     const directories: string[] = [];
     const seenDirectories = new Set<string>();
     for (const project of projects) {
+      for (const sandbox of project.sandboxes ?? []) {
+        this.deps.rememberDirectory(sandbox);
+      }
       const normalized = this.deps.rememberDirectory(project.worktree);
       if (!normalized || seenDirectories.has(normalized)) {
         continue;
