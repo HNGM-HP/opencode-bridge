@@ -85,6 +85,10 @@ export interface SessionQueryOptions {
   directory?: string;
 }
 
+export type OpencodeProject = Project & {
+  sandboxes?: string[];
+};
+
 class OpencodeClientWrapper extends EventEmitter {
   private client: SdkOpencodeClient | null = null;
   private eventStreamManager = new EventStreamManager({
@@ -274,7 +278,7 @@ class OpencodeClientWrapper extends EventEmitter {
     return this.sessionsManager.getOrCreateSession(title);
   }
 
-  async listProjects(options?: SessionQueryOptions): Promise<Project[]> {
+  async listProjects(options?: SessionQueryOptions): Promise<OpencodeProject[]> {
     return this.sessionsManager.listProjects(options);
   }
 
